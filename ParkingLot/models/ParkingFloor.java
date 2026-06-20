@@ -3,17 +3,19 @@ package models;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.TreeSet;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-import enums.parkingSpotState;
 import enums.vechicle;
 import models.parkingSpot.AbstractParkingSpot;
 
 public class ParkingFloor {
     private int floorNumber;
     private List<AbstractParkingSpot> spots;
-
-    // Single TreeSet of ALL available spots, sorted by spotId
     private TreeSet<AbstractParkingSpot> availableSpots;
+
+    private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
+    private final ReentrantReadWriteLock.ReadLock readLock = rwLock.readLock();
+    private final ReentrantReadWriteLock.WriteLock writeLock = rwLock.writeLock();
 
     public ParkingFloor(int floorNumber) {
         this.floorNumber = floorNumber;
@@ -22,92 +24,99 @@ public class ParkingFloor {
         System.out.println("Created new floor with floorNumber " + floorNumber);
     }
 
-    // ===================== ADD / REMOVE =====================
+    // ===================== ADD / REMOVE (WRITE) =====================
 
-    public synchronized void addSpot(AbstractParkingSpot spot) {
-        spot.setSpotId(floorNumber * 1000 + spots.size());
-        spots.add(spot);
-        availableSpots.add(spot);
-        System.out.println("Added " + spot.getSpotType() + " spot to floor " + floorNumber);
-    }
-
-    public synchronized void removeSpot(AbstractParkingSpot spot) {
-        spots.remove(spot);
-        availableSpots.remove(spot);
-        System.out.println("Removed spot from floor " + floorNumber);
-    }
-
-    // ===================== FIND (used by strategies) =====================
-
-    /**
-     * Finds the nearest available spot for the given vehicle type.
-     * Used by NearestSpotStrategy.
-     */
-    public synchronized AbstractParkingSpot getNearestAvailableSpot(vechicle vehicleType) {
-        for (AbstractParkingSpot spot : availableSpots) {
-            if (spot.canFitVehicle(vehicleType)) {
-                return spot;
-            }
+    public void addSpot(AbstractParkingSpot spot) {
+        writeLock.lock();
+        try {
+            spot.setSpotId(floorNumber * 1000 + spots.size());
+            spots.add(spot);
+            availableSpots.add(spot);
+            System.out.println("Added " + spot.getSpotType() + " spot to floor " + floorNumber);
+        } finally {
+            writeLock.unlock();
         }
-        return null;
     }
 
-    /**
-     * Finds the farthest available spot for the given vehicle type.
-     * Used by FarthestSpotStrategy.
-     */
-    public synchronized AbstractParkingSpot getFarthestAvailableSpot(vechicle vehicleType) {
-        for (AbstractParkingSpot spot : availableSpots.descendingSet()) {
-            if (spot.canFitVehicle(vehicleType)) {
-                return spot;
-            }
+    public void removeSpot(AbstractParkingSpot spot) {
+        writeLock.lock();
+        try {
+            spots.remove(spot);
+            availableSpots.remove(spot);
+            System.out.println("Removed spot from floor " + floorNumber);
+        } finally {
+            writeLock.unlock();
         }
-        return null;
     }
 
-    // ===================== FIND + PARK (ATOMIC) =====================
+    // ===================== FIND (READ-ONLY) =====================
 
-    /**
-     * ATOMIC: Finds nearest spot AND removes from available pool in one lock.
-     * Prevents two threads from getting the same spot.
-     */
-    public synchronized AbstractParkingSpot findAndParkNearest(vechicle vehicleType) {
-        for (AbstractParkingSpot spot : availableSpots) {
-            if (spot.canFitVehicle(vehicleType)) {
-                availableSpots.remove(spot);
-                return spot;
+    public AbstractParkingSpot getNearestAvailableSpot(vechicle vehicleType) {
+        readLock.lock();
+        try {
+            for (AbstractParkingSpot spot : availableSpots) {
+                if (spot.canFitVehicle(vehicleType)) {
+                    return spot;
+                }
             }
+            return null;
+        } finally {
+            readLock.unlock();
         }
-        return null;
     }
 
-    /**
-     * ATOMIC: Finds farthest spot AND removes from available pool in one lock.
-     */
-    public synchronized AbstractParkingSpot findAndParkFarthest(vechicle vehicleType) {
-        for (AbstractParkingSpot spot : availableSpots.descendingSet()) {
-            if (spot.canFitVehicle(vehicleType)) {
-                availableSpots.remove(spot);
-                return spot;
+    // ===================== FIND + PARK (WRITE — atomic) =====================
+
+    public AbstractParkingSpot findAndParkNearest(vechicle vehicleType) {
+        writeLock.lock();
+        try {
+            for (AbstractParkingSpot spot : availableSpots) {
+                if (spot.canFitVehicle(vehicleType)) {
+                    availableSpots.remove(spot);
+                    return spot;
+                }
             }
+            return null;
+        } finally {
+            writeLock.unlock();
         }
-        return null;
     }
 
-    // ===================== PARK / UNPARK =====================
-
-    public synchronized void parkVehicle(AbstractParkingSpot spot) {
-        availableSpots.remove(spot);
+    public AbstractParkingSpot findAndParkFarthest(vechicle vehicleType) {
+        writeLock.lock();
+        try {
+            for (AbstractParkingSpot spot : availableSpots.descendingSet()) {
+                if (spot.canFitVehicle(vehicleType)) {
+                    availableSpots.remove(spot);
+                    return spot;
+                }
+            }
+            return null;
+        } finally {
+            writeLock.unlock();
+        }
     }
 
-    public synchronized void unparkVehicle(AbstractParkingSpot spot) {
-        availableSpots.add(spot);
+    // ===================== UNPARK (WRITE) =====================
+
+    public void unparkVehicle(AbstractParkingSpot spot) {
+        writeLock.lock();
+        try {
+            availableSpots.add(spot);
+        } finally {
+            writeLock.unlock();
+        }
     }
 
     // ===================== GETTERS =====================
 
-    public synchronized List<AbstractParkingSpot> getSpots() {
-        return new ArrayList<>(spots);
+    public List<AbstractParkingSpot> getSpots() {
+        readLock.lock();
+        try {
+            return new ArrayList<>(spots);
+        } finally {
+            readLock.unlock();
+        }
     }
 
     public int getFloorNumber() {

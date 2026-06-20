@@ -2,29 +2,62 @@
 
 ## Thread Safety Mechanisms Used
 
-### 1. `synchronized` methods on ParkingFloor
+### 1. `ReentrantReadWriteLock` on ParkingFloor
 
-All methods that read/write `availableSpots` (TreeSet) are synchronized on the same floor instance.
+Instead of plain `synchronized` (which blocks ALL threads even if they're just reading), we use a ReadWriteLock that allows **multiple concurrent readers OR one exclusive writer**.
 
 ```java
-public synchronized AbstractParkingSpot findAndParkNearest(vechicle vehicleType) {
-    for (AbstractParkingSpot spot : availableSpots) {
-        if (spot.canFitVehicle(vehicleType)) {
-            availableSpots.remove(spot);  // find + remove in ONE lock
-            return spot;
+private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
+private final ReentrantReadWriteLock.ReadLock readLock = rwLock.readLock();
+private final ReentrantReadWriteLock.WriteLock writeLock = rwLock.writeLock();
+
+// READ — multiple display boards can check availability simultaneously
+public AbstractParkingSpot getNearestAvailableSpot(vechicle vehicleType) {
+    readLock.lock();
+    try {
+        for (AbstractParkingSpot spot : availableSpots) {
+            if (spot.canFitVehicle(vehicleType)) return spot;
         }
+        return null;
+    } finally {
+        readLock.unlock();
     }
-    return null;
+}
+
+// WRITE — only one thread can find + claim a spot at a time
+public AbstractParkingSpot findAndParkNearest(vechicle vehicleType) {
+    writeLock.lock();
+    try {
+        for (AbstractParkingSpot spot : availableSpots) {
+            if (spot.canFitVehicle(vehicleType)) {
+                availableSpots.remove(spot);  // find + remove atomically
+                return spot;
+            }
+        }
+        return null;
+    } finally {
+        writeLock.unlock();
+    }
 }
 ```
 
-**Why:** The critical race condition is two entry gates finding the same spot simultaneously. By making find-and-remove atomic under one lock, only one thread can claim a spot at a time.
+**Why ReadWriteLock over `synchronized`:**
 
-**What `synchronized` does:**
-- Acquires a lock on the object (`this` = the floor instance)
-- Only one thread can hold this lock at a time
-- Other threads calling any `synchronized` method on the same floor WAIT
-- When the thread exits the method, it releases the lock
+| Scenario | `synchronized` | `ReadWriteLock` |
+|---|---|---|
+| 5 DisplayBoards checking availability | Only 1 at a time (all block) | All 5 run concurrently |
+| 2 cars entering same floor | 1 at a time | 1 at a time (write is exclusive) |
+| 1 car entering + 3 boards reading | All block each other | Writer waits for readers to finish, then runs alone |
+
+**Rules of ReadWriteLock:**
+- Multiple threads can hold the **read lock** simultaneously
+- Only ONE thread can hold the **write lock**, and no readers allowed during it
+- Write lock waits for all current readers to finish before acquiring
+- `finally { unlock() }` ensures the lock is always released, even on exceptions
+
+**Why `Reentrant`:**
+- Same thread can acquire the same lock multiple times without deadlocking itself
+- Useful if a write method calls another write method internally
 
 ---
 
@@ -120,15 +153,20 @@ public synchronized void unpark() {
 
 ---
 
-### 6. Defensive copy in `getSpots()`
+### 6. Defensive copy in `getSpots()` (under read lock)
 
 ```java
-public synchronized List<AbstractParkingSpot> getSpots() {
-    return new ArrayList<>(spots);
+public List<AbstractParkingSpot> getSpots() {
+    readLock.lock();
+    try {
+        return new ArrayList<>(spots);
+    } finally {
+        readLock.unlock();
+    }
 }
 ```
 
-**Why:** Prevents external code from iterating the internal list while another thread modifies it. Returns a snapshot that won't change under the caller.
+**Why:** Prevents external code from iterating the internal list while another thread modifies it. Returns a snapshot that won't change under the caller. Uses read lock since it's just copying — multiple threads can call this concurrently.
 
 ---
 
@@ -176,10 +214,12 @@ public Ticket(Vehical vehicle, AbstractParkingSpot spot, ParkingFloor floor) {
 | Data Structure | Where Used | Why This DS | Time Complexity |
 |---|---|---|---|
 | **TreeSet** | `ParkingFloor.availableSpots` | Keeps spots sorted by `spotId`. Nearest = `first()`, Farthest = `last()`. Auto-removes/adds maintain order. | O(log n) insert/remove/find |
+| **ReentrantReadWriteLock** | `ParkingFloor` | Allows multiple readers (DisplayBoards) concurrently while writers (entry/exit) are exclusive. Better throughput than `synchronized` when reads >> writes. | O(1) lock/unlock |
 | **CopyOnWriteArrayList** | `ParkingLot.floors`, `entryGates`, `exitGates` | Lock-free reads for high-read/low-write scenario. No `ConcurrentModificationException`. | O(1) read, O(n) write |
 | **AtomicInteger** | `Ticket.counter`, `Payment.counter` | Lock-free thread-safe counter using hardware CAS. Zero contention cost when uncontested. | O(1) amortized |
-| **ArrayList** | `ParkingFloor.spots` (all spots including occupied) | Simple indexed collection for total spot tracking. Protected by `synchronized`. | O(1) add, O(n) remove |
+| **ArrayList** | `ParkingFloor.spots` (all spots including occupied) | Simple indexed collection for total spot tracking. Protected by read/write lock. | O(1) add, O(n) remove |
 | **CountDownLatch** | `Main` (coordination) | One-shot barrier — main thread waits until N threads signal completion. | O(1) countDown/await |
+| **ExecutorService (FixedThreadPool)** | `Main` (thread management) | Reuses fixed set of threads instead of creating new threads per task. Limits concurrency to N. | — |
 
 ---
 
@@ -209,31 +249,35 @@ TreeSet also ensures:
 ## How the Critical Path Works (Entry Gate)
 
 ```
-Thread A (Gate 1)                    Thread B (Gate 2)
-        |                                    |
-        v                                    v
-floor.findAndParkNearest(CAR)      floor.findAndParkNearest(CAR)
-        |                                    |  (BLOCKED — waiting for lock)
-   [acquires lock on floor]                  |
-   iterates TreeSet                          |
-   finds spot 1000                           |
-   removes spot 1000 from TreeSet            |
-   [releases lock]                           |
-        |                               [acquires lock]
-        v                               iterates TreeSet
-   spot.park(vehicle)                   spot 1000 is GONE from set
-   ticket = new Ticket(...)             finds spot 1001 instead
-        |                               removes spot 1001
-        v                               [releases lock]
-   DONE — vehicle 1001                       |
-   parked at spot 1000                       v
-                                        spot.park(vehicle)
-                                        ticket = new Ticket(...)
-                                             |
-                                             v
-                                        DONE — vehicle 1002
+Thread A (Gate 1)                    Thread B (Gate 2)               Thread C (DisplayBoard)
+        |                                    |                              |
+        v                                    v                              v
+floor.findAndParkNearest(CAR)      floor.findAndParkNearest(CAR)   floor.getNearestAvailableSpot(CAR)
+        |                                    |                              |
+   [acquires WRITE lock]                     |  (BLOCKED — write waits)     |  (BLOCKED — read waits for writer)
+   iterates TreeSet                          |                              |
+   finds spot 1000                           |                              |
+   removes spot 1000 from TreeSet            |                              |
+   [releases WRITE lock]                     |                              |
+        |                               [acquires WRITE lock]            |  (still waiting)
+        v                               iterates TreeSet                |
+   spot.park(vehicle)                   spot 1000 is GONE               |
+   ticket = new Ticket(...)             finds spot 1001 instead         |
+        |                               removes spot 1001               |
+        v                               [releases WRITE lock]           |
+   DONE — vehicle 1001                       |                     [acquires READ lock]
+   parked at spot 1000                       v                     reads TreeSet (no spot 1000/1001)
+                                        spot.park(vehicle)         returns spot 1002
+                                        ticket = new Ticket(...)   [releases READ lock]
+                                             |                          |
+                                             v                          v
+                                        DONE — vehicle 1002        DisplayBoard shows availability
                                         parked at spot 1001
 ```
+
+**Key insight:** Thread C (DisplayBoard) doesn't block Thread A and Thread B from each other.
+But if two DisplayBoards (Thread C and Thread D) both wanted to read simultaneously, they CAN — 
+multiple READ locks are held at the same time. Only WRITE is exclusive.
 
 No two threads ever get the same spot.
 
@@ -245,8 +289,12 @@ No two threads ever get the same spot.
 Thread C (Exit Gate)
         |
         v
-ticket.getSpot().unpark()           → sets spot state to AVAILABLE (synchronized on spot)
-ticket.getFloor().unparkVehicle()   → adds spot back to TreeSet (synchronized on floor)
+ticket.getSpot().unpark()           → synchronized on spot: sets state to AVAILABLE
+        |
+        v
+ticket.getFloor().unparkVehicle()   → acquires WRITE lock on floor
+                                    → adds spot back to TreeSet
+                                    → releases WRITE lock
         |
         v
    spot is now findable by entry gates again
@@ -292,16 +340,23 @@ exitLatch.await();  // main thread waits for all 3 to finish
 
 ---
 
-### `ParkingFloor.java` — Synchronized Critical Section
+### `ParkingFloor.java` — ReentrantReadWriteLock Critical Section
 
-All spot-finding methods are `synchronized` — this is where the actual thread contention happens:
+All spot-modifying methods acquire the **write lock**, read-only methods acquire the **read lock**:
 ```java
-public synchronized AbstractParkingSpot findAndParkNearest(vechicle vehicleType)
-public synchronized AbstractParkingSpot findAndParkFarthest(vechicle vehicleType)
-public synchronized void unparkVehicle(AbstractParkingSpot spot)
+// WRITE LOCK — exclusive (entry/exit operations)
+public AbstractParkingSpot findAndParkNearest(vechicle vehicleType)
+public AbstractParkingSpot findAndParkFarthest(vechicle vehicleType)
+public void unparkVehicle(AbstractParkingSpot spot)
+public void addSpot(AbstractParkingSpot spot)
+public void removeSpot(AbstractParkingSpot spot)
+
+// READ LOCK — shared (display boards, getters)
+public AbstractParkingSpot getNearestAvailableSpot(vechicle vehicleType)
+public List<AbstractParkingSpot> getSpots()
 ```
 
-When multiple threads call `findAndParkNearest()` on the same floor, only one executes at a time.
+Multiple DisplayBoards can read concurrently, but only one entry/exit thread modifies the TreeSet at a time.
 
 ---
 
@@ -356,7 +411,7 @@ Main.java (ExecutorService with 4 threads)
     │   NearestSpotStrategy.findParkingSpot()
     │         │
     │         ▼
-    │   ParkingFloor.findAndParkNearest()  ← SYNCHRONIZED (only 1 thread at a time per floor)
+    │   ParkingFloor.findAndParkNearest()  ← WRITE LOCK (only 1 thread at a time per floor)
     │         │
     │         ▼
     │   AbstractParkingSpot.park()          ← SYNCHRONIZED (only 1 thread at a time per spot)
@@ -377,12 +432,13 @@ Exit phase (same pattern with unparkVehicle)
 
 | Concern | Solution | DS/Mechanism |
 |---------|----------|---|
-| Two threads get same spot | Atomic `findAndPark*()` | `synchronized` + TreeSet |
+| Two threads get same spot | Atomic `findAndPark*()` under write lock | `ReentrantReadWriteLock` + TreeSet |
+| Multiple readers blocked unnecessarily | Read lock allows concurrent reads | `ReentrantReadWriteLock.ReadLock` |
 | Duplicate ticket/payment IDs | Lock-free counter | `AtomicInteger` (CAS) |
 | Partially constructed singleton | Prevent reordering | `volatile` + DCL |
 | Concurrent list read/write | Copy-on-write snapshot | `CopyOnWriteArrayList` |
 | Spot state corruption | Lock on individual spot | `synchronized` on park/unpark |
-| Leaking mutable internal state | Return snapshot | Defensive copy (`new ArrayList<>`) |
+| Leaking mutable internal state | Return snapshot under read lock | Defensive copy (`new ArrayList<>`) |
 | Wait for N threads to finish | Count-based barrier | `CountDownLatch` |
 | Efficient thread reuse | Fixed pool | `ExecutorService` |
 | Return spot on exit | Ticket stores floor ref | Floor reference in Ticket |
