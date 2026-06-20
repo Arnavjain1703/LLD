@@ -1,11 +1,13 @@
 package models;
 
+import java.util.concurrent.atomic.AtomicInteger;
+
 import enums.PaymentMethod;
 import enums.PaymentStatus;
 import models.PaymentProcessor.PaymentProcessorInterface;
 
 public class Payment {
-    private static int counter = 0;
+    private static final AtomicInteger counter = new AtomicInteger(0);
     private String paymentId;
     private Ticket ticket;
     private double amount;
@@ -13,7 +15,7 @@ public class Payment {
     private PaymentStatus status;
 
     public Payment(Ticket ticket, double amount, PaymentMethod method) {
-        this.paymentId = "PAY-" + (++counter);
+        this.paymentId = "PAY-" + counter.incrementAndGet();
         this.ticket = ticket;
         this.amount = amount;
         this.method = method;

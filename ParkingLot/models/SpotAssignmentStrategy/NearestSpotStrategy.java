@@ -15,7 +15,7 @@ public class NearestSpotStrategy implements SpotAssignmentStrategyInterface {
     @Override
     public AbstractParkingSpot findParkingSpot(List<ParkingFloor> parkingFloors, Vehical vehical) {
         for (ParkingFloor floor : parkingFloors) {
-            AbstractParkingSpot spot = floor.getNearestAvailableSpot(vehical.getVehicalType());
+            AbstractParkingSpot spot = floor.findAndParkNearest(vehical.getVehicalType());
             if (spot != null) {
                 return spot;
             }

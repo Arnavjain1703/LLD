@@ -106,8 +106,8 @@ public class ParkingFloor {
 
     // ===================== GETTERS =====================
 
-    public List<AbstractParkingSpot> getSpots() {
-        return spots;
+    public synchronized List<AbstractParkingSpot> getSpots() {
+        return new ArrayList<>(spots);
     }
 
     public int getFloorNumber() {

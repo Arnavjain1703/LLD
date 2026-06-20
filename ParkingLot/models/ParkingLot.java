@@ -1,10 +1,10 @@
 package models;
 
-import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 public class ParkingLot {
-    private static ParkingLot instance;
+    private static volatile ParkingLot instance;
 
     private String id;
     private String name;
@@ -17,15 +17,19 @@ public class ParkingLot {
         this.id = id;
         this.name = name;
         this.address = address;
-        this.floors = new ArrayList<>();
-        this.entryGates = new ArrayList<>();
-        this.exitGates = new ArrayList<>();
+        this.floors = new CopyOnWriteArrayList<>();
+        this.entryGates = new CopyOnWriteArrayList<>();
+        this.exitGates = new CopyOnWriteArrayList<>();
         System.out.println("Created Parking Lot: " + name);
     }
 
-    public static synchronized ParkingLot getInstance(String id, String name, Address address) {
+    public static ParkingLot getInstance(String id, String name, Address address) {
         if (instance == null) {
-            instance = new ParkingLot(id, name, address);
+            synchronized (ParkingLot.class) {
+                if (instance == null) {
+                    instance = new ParkingLot(id, name, address);
+                }
+            }
         }
         return instance;
     }

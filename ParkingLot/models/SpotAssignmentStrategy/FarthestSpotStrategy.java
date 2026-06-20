@@ -16,7 +16,7 @@ public class FarthestSpotStrategy implements SpotAssignmentStrategyInterface {
     public AbstractParkingSpot findParkingSpot(List<ParkingFloor> parkingFloors, Vehical vehical) {
         for (int i = parkingFloors.size() - 1; i >= 0; i--) {
             ParkingFloor floor = parkingFloors.get(i);
-            AbstractParkingSpot spot = floor.getFarthestAvailableSpot(vehical.getVehicalType());
+            AbstractParkingSpot spot = floor.findAndParkFarthest(vehical.getVehicalType());
             if (spot != null) {
                 return spot;
             }

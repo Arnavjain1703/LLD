@@ -1,23 +1,26 @@
 package models;
 
 import java.time.LocalDateTime;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import enums.TicketStatus;
 import models.parkingSpot.AbstractParkingSpot;
 
 public class Ticket {
-    private static int counter = 0;
+    private static final AtomicInteger counter = new AtomicInteger(0);
     private String ticketId;
     private Vehical vehicle;
     private AbstractParkingSpot spot;
+    private ParkingFloor floor;
     private LocalDateTime entryTime;
     private LocalDateTime exitTime;
     private TicketStatus status;
 
-    public Ticket(Vehical vehicle, AbstractParkingSpot spot) {
-        this.ticketId = "TKT-" + (++counter);
+    public Ticket(Vehical vehicle, AbstractParkingSpot spot, ParkingFloor floor) {
+        this.ticketId = "TKT-" + counter.incrementAndGet();
         this.vehicle = vehicle;
         this.spot = spot;
+        this.floor = floor;
         this.entryTime = LocalDateTime.now();
         this.status = TicketStatus.ACTIVE;
     }
@@ -32,6 +35,10 @@ public class Ticket {
 
     public AbstractParkingSpot getSpot() {
         return spot;
+    }
+
+    public ParkingFloor getFloor() {
+        return floor;
     }
 
     public LocalDateTime getEntryTime() {

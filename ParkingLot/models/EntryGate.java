@@ -14,12 +14,6 @@ public class EntryGate {
         this.assignmentStrategy = assignmentStrategy;
     }
 
-    /**
-     * Processes vehicle entry:
-     * 1. Finds an available spot using the assignment strategy
-     * 2. Parks the vehicle in the spot
-     * 3. Creates and returns a Ticket
-     */
     public Ticket processEntry(Vehical vehicle, List<ParkingFloor> parkingFloors) {
         AbstractParkingSpot spot = assignmentStrategy.findParkingSpot(parkingFloors, vehicle);
 
@@ -27,10 +21,21 @@ public class EntryGate {
             throw new RuntimeException("No spot available for vehicle: " + vehicle.getVehicalType());
         }
 
+        ParkingFloor floor = findFloorForSpot(spot, parkingFloors);
         spot.park(vehicle);
-        Ticket ticket = new Ticket(vehicle, spot);
+        Ticket ticket = new Ticket(vehicle, spot, floor);
         System.out.println("Gate " + gateId + " issued ticket " + ticket.getTicketId());
         return ticket;
+    }
+
+    private ParkingFloor findFloorForSpot(AbstractParkingSpot spot, List<ParkingFloor> floors) {
+        int floorNumber = spot.getSpotId() / 1000;
+        for (ParkingFloor floor : floors) {
+            if (floor.getFloorNumber() == floorNumber) {
+                return floor;
+            }
+        }
+        return floors.get(0);
     }
 
     public String getGateId() {
