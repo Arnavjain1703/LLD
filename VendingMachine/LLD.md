@@ -359,7 +359,7 @@ Thread-1          Thread-2          VendingMachine (synchronized)
 ## 8. File Structure
 
 ```
-src/
+VendingMachine/
 ├── Main.java                            # Demo driver with all flows + concurrency test
 ├── exception/
 │   ├── VendingMachineException.java     # Base exception
