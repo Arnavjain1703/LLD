@@ -1,5 +1,9 @@
 package models;
 
+import models.ItemDispenseStrategy.ItemDispenseStrategy;
+import models.ItemDispenseStrategy.StandardDispenseStrategy;
+import models.PaymentProcessor.CashPaymentProcessor;
+import models.PaymentProcessor.PaymentProcessorInterface;
 import models.State.IdleState;
 import models.State.VendingMachineState;
 
@@ -9,14 +13,20 @@ public class VendingMachine {
     private String machineId;
     private VendingMachineState currentState;
     private Inventory inventory;
+    private Display display;
     private double currentBalance;
     private Product selectedProduct;
+    private PaymentProcessorInterface paymentProcessor;
+    private ItemDispenseStrategy dispenseStrategy;
 
     private VendingMachine(String machineId) {
         this.machineId = machineId;
         this.inventory = new Inventory();
+        this.display = new Display();
         this.currentState = new IdleState();
         this.currentBalance = 0;
+        this.paymentProcessor = new CashPaymentProcessor();
+        this.dispenseStrategy = new StandardDispenseStrategy();
         System.out.println("Vending Machine " + machineId + " initialized.");
     }
 
@@ -29,6 +39,10 @@ public class VendingMachine {
             }
         }
         return instance;
+    }
+
+    public synchronized void displayProducts() {
+        display.showProducts(inventory);
     }
 
     public synchronized void selectProduct(String code) {
@@ -59,6 +73,10 @@ public class VendingMachine {
         return inventory;
     }
 
+    public Display getDisplay() {
+        return display;
+    }
+
     public double getBalance() {
         return currentBalance;
     }
@@ -81,5 +99,21 @@ public class VendingMachine {
 
     public String getMachineId() {
         return machineId;
+    }
+
+    public PaymentProcessorInterface getPaymentProcessor() {
+        return paymentProcessor;
+    }
+
+    public void setPaymentProcessor(PaymentProcessorInterface processor) {
+        this.paymentProcessor = processor;
+    }
+
+    public ItemDispenseStrategy getDispenseStrategy() {
+        return dispenseStrategy;
+    }
+
+    public void setDispenseStrategy(ItemDispenseStrategy strategy) {
+        this.dispenseStrategy = strategy;
     }
 }

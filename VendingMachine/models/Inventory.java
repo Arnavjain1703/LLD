@@ -104,4 +104,13 @@ public class Inventory {
             readLock.unlock();
         }
     }
+
+    public Map<String, Rack> getAllRacks() {
+        readLock.lock();
+        try {
+            return new HashMap<>(racks);
+        } finally {
+            readLock.unlock();
+        }
+    }
 }

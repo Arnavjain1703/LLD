@@ -1,15 +1,10 @@
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-
 import models.*;
+import models.PaymentProcessor.CardPaymentProcessor;
 
 public class Main {
-    public static void main(String[] args) throws InterruptedException {
-        // 1. Create Vending Machine (Singleton)
+    public static void main(String[] args) {
         VendingMachine machine = VendingMachine.getInstance("VM-001");
 
-        // 2. Admin stocks the machine
         AdminService admin = new AdminService(machine);
         admin.addProduct("A1", new Product("Coca Cola", 1.50, "A1"), 5, 10);
         admin.addProduct("A2", new Product("Pepsi", 1.50, "A2"), 3, 10);
@@ -17,93 +12,68 @@ public class Main {
         admin.addProduct("B2", new Product("Snickers", 1.75, "B2"), 6, 10);
         admin.addProduct("C1", new Product("Water Bottle", 1.00, "C1"), 8, 12);
 
-        admin.getInventoryReport();
+        ButtonPanel buttons = new ButtonPanel(machine);
 
-        // 3. Normal purchase flow
-        System.out.println("========== SCENARIO 1: Normal Purchase ==========\n");
-        machine.selectProduct("A1");
-        machine.insertMoney(2.00);
-        machine.dispense();
+        // ===== FLOW 1: Display products =====
+        System.out.println("\n========== FLOW 1: Display Products ==========");
+        buttons.pressDisplayProducts();
 
-        // 4. Insufficient funds scenario
-        System.out.println("\n========== SCENARIO 2: Insufficient Funds ==========\n");
-        machine.selectProduct("B1");
-        machine.insertMoney(1.00);
-        machine.dispense();
-        machine.insertMoney(1.00);
-        machine.dispense();
+        // ===== FLOW 2: Normal purchase (user flow) =====
+        System.out.println("\n========== FLOW 2: Normal Purchase ==========");
+        buttons.pressProductButton("A1");
+        buttons.pressInsertCash(1.00);
+        buttons.pressInsertCash(1.00);
+        buttons.pressDispense();
 
-        // 5. Cancel transaction
-        System.out.println("\n========== SCENARIO 3: Cancel Transaction ==========\n");
-        machine.selectProduct("B2");
-        machine.insertMoney(1.00);
-        machine.cancelTransaction();
+        // ===== FLOW 3: Insufficient funds then add more =====
+        System.out.println("\n========== FLOW 3: Insufficient Funds ==========");
+        buttons.pressProductButton("B1");
+        buttons.pressInsertCash(1.00);
+        buttons.pressDispense();
+        buttons.pressInsertCash(1.00);
+        buttons.pressDispense();
 
-        // 6. Out of stock scenario
-        System.out.println("\n========== SCENARIO 4: Out of Stock ==========\n");
+        // ===== FLOW 4: Cancel flow (refund) =====
+        System.out.println("\n========== FLOW 4: Cancel Transaction ==========");
+        buttons.pressProductButton("B2");
+        buttons.pressInsertCash(1.00);
+        buttons.pressCancel();
+
+        // ===== FLOW 5: Cancel with no transaction =====
+        System.out.println("\n========== FLOW 5: Cancel With No Transaction ==========");
+        buttons.pressCancel();
+
+        // ===== FLOW 6: Insert money without selecting product =====
+        System.out.println("\n========== FLOW 6: Insert Money Without Selection ==========");
+        buttons.pressInsertCash(1.00);
+
+        // ===== FLOW 7: Dispense without anything =====
+        System.out.println("\n========== FLOW 7: Dispense Without Selection ==========");
+        buttons.pressDispense();
+
+        // ===== FLOW 8: Out of stock =====
+        System.out.println("\n========== FLOW 8: Out of Stock ==========");
         admin.removeProduct("A2");
-        machine.selectProduct("A2");
+        buttons.pressProductButton("A2");
 
-        // 7. Admin restocks
-        System.out.println("\n========== SCENARIO 5: Restock ==========\n");
-        admin.restock("A1", 3);
+        // ===== FLOW 9: Product selection while transaction in progress =====
+        System.out.println("\n========== FLOW 9: Select During Transaction ==========");
+        buttons.pressProductButton("C1");
+        buttons.pressInsertCash(0.50);
+        buttons.pressProductButton("B1");
+        buttons.pressCancel();
+
+        // ===== FLOW 10: Card payment =====
+        System.out.println("\n========== FLOW 10: Card Payment ==========");
+        machine.setPaymentProcessor(new CardPaymentProcessor());
+        buttons.pressProductButton("C1");
+        buttons.pressInsertCash(2.00);
+        buttons.pressDispense();
+
+        // ===== Display final inventory =====
+        System.out.println("\n========== FINAL INVENTORY ==========");
+        buttons.pressDisplayProducts();
         admin.getInventoryReport();
-
-        // 8. Concurrent scenario: admin restocks while user purchases
-        System.out.println("========== SCENARIO 6: Concurrent Admin + User ==========\n");
-
-        ExecutorService executor = Executors.newFixedThreadPool(3);
-        CountDownLatch latch = new CountDownLatch(3);
-
-        // User thread: buys Coca Cola
-        executor.submit(() -> {
-            try {
-                machine.selectProduct("A1");
-                machine.insertMoney(2.00);
-                machine.dispense();
-                System.out.println("[Thread " + Thread.currentThread().getName()
-                        + "] User purchase complete.");
-            } catch (Exception e) {
-                System.out.println("[Thread " + Thread.currentThread().getName()
-                        + "] User failed: " + e.getMessage());
-            } finally {
-                latch.countDown();
-            }
-        });
-
-        // Admin thread 1: restocks Lays Chips
-        executor.submit(() -> {
-            try {
-                admin.restock("B1", 2);
-                System.out.println("[Thread " + Thread.currentThread().getName()
-                        + "] Admin restock of B1 complete.");
-            } catch (Exception e) {
-                System.out.println("[Thread " + Thread.currentThread().getName()
-                        + "] Admin failed: " + e.getMessage());
-            } finally {
-                latch.countDown();
-            }
-        });
-
-        // Admin thread 2: views inventory
-        executor.submit(() -> {
-            try {
-                admin.getInventoryReport();
-                System.out.println("[Thread " + Thread.currentThread().getName()
-                        + "] Admin report complete.");
-            } catch (Exception e) {
-                System.out.println("[Thread " + Thread.currentThread().getName()
-                        + "] Admin report failed: " + e.getMessage());
-            } finally {
-                latch.countDown();
-            }
-        });
-
-        latch.await();
-        System.out.println("\n--- All concurrent operations complete ---\n");
-
-        admin.getInventoryReport();
-        executor.shutdown();
 
         System.out.println("========== SIMULATION COMPLETE ==========");
     }

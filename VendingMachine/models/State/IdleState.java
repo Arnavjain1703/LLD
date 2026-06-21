@@ -7,33 +7,29 @@ public class IdleState implements VendingMachineState {
     @Override
     public void selectProduct(VendingMachine machine, String code) {
         if (!machine.getInventory().isAvailable(code)) {
-            System.out.println("Product " + code + " is out of stock.");
+            machine.getDisplay().showError("Product " + code + " is out of stock.");
+            machine.getDisplay().showWelcome();
             return;
         }
         machine.setSelectedProduct(machine.getInventory().getProduct(code));
-        System.out.println("Selected: " + machine.getSelectedProduct().getName()
-                + " | Price: " + machine.getSelectedProduct().getPrice());
-        System.out.println("Please insert money.");
-    }
-
-    @Override
-    public void insertMoney(VendingMachine machine, double amount) {
-        if (machine.getSelectedProduct() == null) {
-            System.out.println("Please select a product first.");
-            return;
-        }
-        machine.addBalance(amount);
-        System.out.println("Inserted: " + amount + " | Balance: " + machine.getBalance());
+        machine.getDisplay().showMessage("Selected: " + machine.getSelectedProduct().getName()
+                + " | Price: $" + String.format("%.2f", machine.getSelectedProduct().getPrice()));
+        machine.getDisplay().showInsertMoney(0, machine.getSelectedProduct().getPrice());
         machine.setState(new HasMoneyState());
     }
 
     @Override
+    public void insertMoney(VendingMachine machine, double amount) {
+        machine.getDisplay().showError("Please select a product first.");
+    }
+
+    @Override
     public void dispense(VendingMachine machine) {
-        System.out.println("Please select a product and insert money first.");
+        machine.getDisplay().showError("Please select a product and insert money first.");
     }
 
     @Override
     public void cancel(VendingMachine machine) {
-        System.out.println("No transaction in progress.");
+        machine.getDisplay().showMessage("No transaction in progress.");
     }
 }
