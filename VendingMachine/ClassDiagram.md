@@ -9,32 +9,37 @@ classDiagram
         <<Singleton>>
         -static volatile VendingMachine instance
         -String machineId
-        -VendingMachineState currentState
         -Inventory inventory
         -Display display
-        -double currentBalance
-        -Product selectedProduct
         -PaymentProcessorInterface paymentProcessor
         -ItemDispenseStrategy dispenseStrategy
+        -User currentUser
         +static getInstance(String machineId) VendingMachine
         +synchronized displayProducts()
         +synchronized selectProduct(String code)
         +synchronized insertMoney(double amount)
         +synchronized dispense()
         +synchronized cancelTransaction()
-        +setState(VendingMachineState)
-        +getState() VendingMachineState
         +getInventory() Inventory
         +getDisplay() Display
+        +getPaymentProcessor() PaymentProcessorInterface
+        +setPaymentProcessor(PaymentProcessorInterface)
+        +getDispenseStrategy() ItemDispenseStrategy
+        +setDispenseStrategy(ItemDispenseStrategy)
+    }
+
+    class User {
+        -VendingMachineState currentState
+        -double currentBalance
+        -Product selectedProduct
+        +getState() VendingMachineState
+        +setState(VendingMachineState)
         +getBalance() double
         +addBalance(double amount)
         +resetBalance()
         +getSelectedProduct() Product
         +setSelectedProduct(Product)
-        +getPaymentProcessor() PaymentProcessorInterface
-        +setPaymentProcessor(PaymentProcessorInterface)
-        +getDispenseStrategy() ItemDispenseStrategy
-        +setDispenseStrategy(ItemDispenseStrategy)
+        +isActive() boolean
     }
 
     %% ─── USER INTERFACE ────────────────────────────────────
@@ -66,7 +71,7 @@ classDiagram
     %% ─── INVENTORY ─────────────────────────────────────────
 
     class Inventory {
-        -ConcurrentHashMap~String, Rack~ racks
+        -Map~String, Rack~ racks
         -ReentrantReadWriteLock rwLock
         +addRack(Rack)
         +removeRack(String code)
@@ -106,31 +111,31 @@ classDiagram
 
     class VendingMachineState {
         <<interface>>
-        +selectProduct(VendingMachine, String code)
-        +insertMoney(VendingMachine, double amount)
-        +dispense(VendingMachine)
-        +cancel(VendingMachine)
+        +selectProduct(VendingMachine, User, String code)
+        +insertMoney(VendingMachine, User, double amount)
+        +dispense(VendingMachine, User)
+        +cancel(VendingMachine, User)
     }
 
     class IdleState {
-        +selectProduct(VendingMachine, String code)
-        +insertMoney(VendingMachine, double amount)
-        +dispense(VendingMachine)
-        +cancel(VendingMachine)
+        +selectProduct(VendingMachine, User, String code)
+        +insertMoney(VendingMachine, User, double amount)
+        +dispense(VendingMachine, User)
+        +cancel(VendingMachine, User)
     }
 
     class HasMoneyState {
-        +selectProduct(VendingMachine, String code)
-        +insertMoney(VendingMachine, double amount)
-        +dispense(VendingMachine)
-        +cancel(VendingMachine)
+        +selectProduct(VendingMachine, User, String code)
+        +insertMoney(VendingMachine, User, double amount)
+        +dispense(VendingMachine, User)
+        +cancel(VendingMachine, User)
     }
 
     class DispensingState {
-        +selectProduct(VendingMachine, String code)
-        +insertMoney(VendingMachine, double amount)
-        +dispense(VendingMachine)
-        +cancel(VendingMachine)
+        +selectProduct(VendingMachine, User, String code)
+        +insertMoney(VendingMachine, User, double amount)
+        +dispense(VendingMachine, User)
+        +cancel(VendingMachine, User)
     }
 
     %% ─── PAYMENT (Strategy) ───────────────────────────────
@@ -192,8 +197,10 @@ classDiagram
 
     VendingMachine "1" *-- "1" Inventory
     VendingMachine "1" *-- "1" Display
-    VendingMachine --> VendingMachineState : currentState
-    VendingMachine --> Product : selectedProduct
+    VendingMachine "1" *-- "1" User
+
+    User --> VendingMachineState : currentState
+    User --> Product : selectedProduct
 
     Inventory "1" *-- "many" Rack
     Rack "1" *-- "1" Product
@@ -222,8 +229,8 @@ classDiagram
 |--------|------|---------|----------------------|
 | `*--` | Composition | Strong ownership — child is created and destroyed with parent | Child dies with parent |
 | `o--` | Aggregation | Weak ownership — parent holds child but child exists independently | Child survives parent |
-| `<\|--` | Inheritance | "is-a" — subclass extends parent | — |
-| `<\|..` | Realization | "implements" — class fulfills interface contract | — |
+| `<|--` | Inheritance | "is-a" — subclass extends parent | — |
+| `<|..` | Realization | "implements" — class fulfills interface contract | — |
 | `-->` | Association | "has-a" — holds a long-term reference | Independent |
 | `..>` | Dependency | "uses-a" — short-term, method-level usage | Independent |
 
@@ -236,21 +243,22 @@ classDiagram
 |---|---|
 | `VendingMachine *-- Inventory` | Inventory has no meaning outside the machine |
 | `VendingMachine *-- Display` | Display is owned by and exists only within the machine |
+| `VendingMachine *-- User` | User is the current user session, owned by machine |
 | `Inventory *-- Rack` | Racks belong to the inventory |
 | `Rack *-- Product` | Product definition is owned by the rack |
 
 ### Realization `<|..`
 | Relationship | Reason |
 |---|---|
-| `VendingMachineState <\|.. IdleState / HasMoneyState / DispensingState` | Each state implements the state interface |
-| `PaymentProcessorInterface <\|.. CashPaymentProcessor / CardPaymentProcessor` | Each implements payment processing |
-| `ItemDispenseStrategy <\|.. StandardDispenseStrategy` | Implements dispensing behavior |
+| `VendingMachineState <|.. IdleState / HasMoneyState / DispensingState` | Each state implements the state interface |
+| `PaymentProcessorInterface <|.. CashPaymentProcessor / CardPaymentProcessor` | Each implements payment processing |
+| `ItemDispenseStrategy <|.. StandardDispenseStrategy` | Implements dispensing behavior |
 
 ### Association `-->`
 | Relationship | Reason |
 |---|---|
-| `VendingMachine --> VendingMachineState` | Machine holds current state reference (swapped at runtime) |
-| `VendingMachine --> Product` | Machine holds reference to currently selected product |
+| `User --> VendingMachineState` | User holds current state reference (swapped at runtime) |
+| `User --> Product` | User holds reference to currently selected product |
 | `ButtonPanel --> VendingMachine` | Panel holds persistent reference, delegates all user actions |
 | `AdminService --> VendingMachine` | Admin holds persistent reference to machine for management ops |
 

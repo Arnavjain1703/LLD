@@ -2,17 +2,18 @@ package models;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class Inventory {
-    private final ConcurrentHashMap<String, Rack> racks;
+    // Using HashMap (not ConcurrentHashMap) because ReadWriteLock already guards all access.
+    // RWLock is needed over CHM because we have compound operations (get + mutate) that must be atomic.
+    private final Map<String, Rack> racks;
     private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
     private final ReentrantReadWriteLock.ReadLock readLock = rwLock.readLock();
     private final ReentrantReadWriteLock.WriteLock writeLock = rwLock.writeLock();
 
     public Inventory() {
-        this.racks = new ConcurrentHashMap<>();
+        this.racks = new HashMap<>();
     }
 
     public void addRack(Rack rack) {

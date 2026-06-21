@@ -1,32 +1,33 @@
 package models.State;
 
+import models.User;
 import models.VendingMachine;
 
 public class HasMoneyState implements VendingMachineState {
 
     @Override
-    public void selectProduct(VendingMachine machine, String code) {
-        machine.getDisplay().showError("Product already selected. Complete or cancel current transaction.");
+    public void selectProduct(VendingMachine machine, User user, String code) {
+        machine.getDisplay().showError("Product already selected. Complete or cancel current user.");
     }
 
     @Override
-    public void insertMoney(VendingMachine machine, double amount) {
-        machine.addBalance(amount);
-        machine.getDisplay().showInsertMoney(machine.getBalance(), machine.getSelectedProduct().getPrice());
+    public void insertMoney(VendingMachine machine, User user, double amount) {
+        user.addBalance(amount);
+        machine.getDisplay().showInsertMoney(user.getBalance(), user.getSelectedProduct().getPrice());
 
-        if (machine.getBalance() >= machine.getSelectedProduct().getPrice()) {
+        if (user.getBalance() >= user.getSelectedProduct().getPrice()) {
             machine.getDisplay().showMessage("Sufficient funds. Press DISPENSE to collect your item.");
         }
     }
 
     @Override
-    public void dispense(VendingMachine machine) {
-        double price = machine.getSelectedProduct().getPrice();
+    public void dispense(VendingMachine machine, User user) {
+        double price = user.getSelectedProduct().getPrice();
 
-        if (machine.getBalance() < price) {
+        if (user.getBalance() < price) {
             machine.getDisplay().showError("Insufficient funds. Need: $"
                     + String.format("%.2f", price) + " | Have: $"
-                    + String.format("%.2f", machine.getBalance()));
+                    + String.format("%.2f", user.getBalance()));
             machine.getDisplay().showMessage("Insert more money or press CANCEL.");
             return;
         }
@@ -36,19 +37,19 @@ public class HasMoneyState implements VendingMachineState {
             return;
         }
 
-        machine.setState(new DispensingState());
+        user.setState(new DispensingState());
         machine.dispense();
     }
 
     @Override
-    public void cancel(VendingMachine machine) {
-        double refund = machine.getBalance();
+    public void cancel(VendingMachine machine, User user) {
+        double refund = user.getBalance();
         if (refund > 0) {
             machine.getPaymentProcessor().refund(refund);
         }
-        machine.resetBalance();
-        machine.setSelectedProduct(null);
-        machine.setState(new IdleState());
+        user.resetBalance();
+        user.setSelectedProduct(null);
+        user.setState(new IdleState());
         machine.getDisplay().showRefund(refund);
         machine.getDisplay().showWelcome();
     }

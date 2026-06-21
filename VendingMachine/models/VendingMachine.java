@@ -4,29 +4,24 @@ import models.ItemDispenseStrategy.ItemDispenseStrategy;
 import models.ItemDispenseStrategy.StandardDispenseStrategy;
 import models.PaymentProcessor.CashPaymentProcessor;
 import models.PaymentProcessor.PaymentProcessorInterface;
-import models.State.IdleState;
-import models.State.VendingMachineState;
 
 public class VendingMachine {
     private static volatile VendingMachine instance;
 
     private String machineId;
-    private VendingMachineState currentState;
     private Inventory inventory;
     private Display display;
-    private double currentBalance;
-    private Product selectedProduct;
     private PaymentProcessorInterface paymentProcessor;
     private ItemDispenseStrategy dispenseStrategy;
+    private User currentUser;
 
     private VendingMachine(String machineId) {
         this.machineId = machineId;
         this.inventory = new Inventory();
         this.display = new Display();
-        this.currentState = new IdleState();
-        this.currentBalance = 0;
         this.paymentProcessor = new CashPaymentProcessor();
         this.dispenseStrategy = new StandardDispenseStrategy();
+        this.currentUser = new User();
         System.out.println("Vending Machine " + machineId + " initialized.");
     }
 
@@ -46,27 +41,23 @@ public class VendingMachine {
     }
 
     public synchronized void selectProduct(String code) {
-        currentState.selectProduct(this, code);
+        currentUser.getState().selectProduct(this, currentUser, code);
     }
 
     public synchronized void insertMoney(double amount) {
-        currentState.insertMoney(this, amount);
+        currentUser.getState().insertMoney(this, currentUser, amount);
     }
 
     public synchronized void dispense() {
-        currentState.dispense(this);
+        currentUser.getState().dispense(this, currentUser);
     }
 
     public synchronized void cancelTransaction() {
-        currentState.cancel(this);
+        currentUser.getState().cancel(this, currentUser);
     }
 
-    public void setState(VendingMachineState state) {
-        this.currentState = state;
-    }
-
-    public VendingMachineState getState() {
-        return currentState;
+    public String getMachineId() {
+        return machineId;
     }
 
     public Inventory getInventory() {
@@ -75,30 +66,6 @@ public class VendingMachine {
 
     public Display getDisplay() {
         return display;
-    }
-
-    public double getBalance() {
-        return currentBalance;
-    }
-
-    public void addBalance(double amount) {
-        this.currentBalance += amount;
-    }
-
-    public void resetBalance() {
-        this.currentBalance = 0;
-    }
-
-    public Product getSelectedProduct() {
-        return selectedProduct;
-    }
-
-    public void setSelectedProduct(Product product) {
-        this.selectedProduct = product;
-    }
-
-    public String getMachineId() {
-        return machineId;
     }
 
     public PaymentProcessorInterface getPaymentProcessor() {
