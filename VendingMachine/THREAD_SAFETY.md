@@ -1,8 +1,30 @@
 # Thread Safety & Data Structure Choices
 
-## Thread Safety Mechanisms Used
+## Thread Safety Model — Layered, No Redundancy
 
-### 1. `synchronized` on VendingMachine Public Methods
+Each layer owns exactly one concern. No double-locking.
+
+```
+┌───────────────────────────────────────────────────────────┐
+│  VendingMachine (synchronized on user-facing methods)     │
+│  ── serializes state machine transitions                  │
+│                                                           │
+│  ┌─────────────────────────────┐  ┌────────────────────┐ │
+│  │  Inventory (ConcurrentHM)   │  │ ButtonPanel (CHM)  │ │
+│  │  ── admin add/remove safe   │  │ ── dynamic buttons │ │
+│  │  ── single-key lookups      │  └────────────────────┘ │
+│  │                             │                          │
+│  │  ┌───────────────────────┐  │                          │
+│  │  │  Rack (AtomicInteger) │  │                          │
+│  │  │  ── CAS dispense      │  │                          │
+│  │  └───────────────────────┘  │                          │
+│  └─────────────────────────────┘                          │
+└───────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 1. `synchronized` on VendingMachine Public Methods
 
 ```java
 public synchronized void selectProduct(String code) {
@@ -24,11 +46,11 @@ public synchronized void cancelTransaction() {
 
 **Why:** The state pattern delegates to the current state object. A state transition involves reading state, acting, and possibly changing state — this check-then-act sequence must be atomic. Without `synchronized`, two threads could both see `HasMoneyState`, both attempt to dispense, and double-dispense a single item.
 
-**Trade-off:** A vending machine typically serves one user at a time, so `synchronized` on public methods is the simplest correct approach. If we needed higher throughput (e.g., multiple vending machines behind one API), we'd use finer-grained locking.
+**Trade-off:** A vending machine typically serves one user at a time, so `synchronized` on public methods is the simplest correct approach. If we needed higher throughput (e.g., multiple vending machines behind one API), we'd use finer-grained locking or a lock-per-machine map.
 
 ---
 
-### 2. `volatile` + Double-Checked Locking for Singleton
+## 2. `volatile` + Double-Checked Locking for Singleton
 
 ```java
 private static volatile VendingMachine instance;
@@ -46,91 +68,127 @@ public static VendingMachine getInstance(String machineId) {
 ```
 
 **Why:**
-- `volatile` prevents a thread from seeing a partially-constructed object (stops CPU instruction reordering).
-- First `if` check avoids locking on every `getInstance()` call after initialization.
+- `volatile` prevents a thread from seeing a partially-constructed object (stops CPU instruction reordering via memory barrier).
+- First `if` check avoids locking on every `getInstance()` call after initialization (fast path).
 - Second `if` check (inside lock) prevents double creation if two threads pass the first check simultaneously.
 
 ---
 
-### 3. `ReentrantReadWriteLock` on Inventory
+## 3. `ConcurrentHashMap` on Inventory
 
 ```java
-private final ReentrantReadWriteLock rwLock = new ReentrantReadWriteLock();
-private final ReentrantReadWriteLock.ReadLock readLock = rwLock.readLock();
-private final ReentrantReadWriteLock.WriteLock writeLock = rwLock.writeLock();
+private final ConcurrentHashMap<String, Rack> racks = new ConcurrentHashMap<>();
 
-// READ — multiple threads can read inventory concurrently
+public void addRack(Rack rack) {
+    racks.put(rack.getCode(), rack);
+}
+
 public boolean isAvailable(String code) {
-    readLock.lock();
-    try {
-        Rack rack = racks.get(code);
-        return rack != null && rack.isAvailable();
-    } finally {
-        readLock.unlock();
-    }
-}
-
-// WRITE — only one thread can modify inventory at a time
-public void dispenseItem(String code) {
-    writeLock.lock();
-    try {
-        Rack rack = racks.get(code);
-        rack.dispense();
-    } finally {
-        writeLock.unlock();
-    }
+    Rack rack = racks.get(code);
+    return rack != null && rack.isAvailable();
 }
 ```
 
-**Why ReadWriteLock over `synchronized`:**
+**Why ConcurrentHashMap (not RWLock):**
 
-| Scenario | `synchronized` | `ReadWriteLock` |
+All Inventory operations are **single-key** lookups or mutations:
+- `get(code)` — single key read
+- `put(code, rack)` — single key write
+- `remove(code)` — single key write
+
+There are no compound operations that span multiple keys (e.g., "check key A then write key B"). ConcurrentHashMap handles all of these atomically without external locking.
+
+**Why the old design (RWLock + HashMap) was over-engineered:**
+
+| Concern | RWLock approach | ConcurrentHashMap approach |
 |---|---|---|
-| 3 admins checking inventory report | Only 1 at a time | All 3 run concurrently |
-| Admin restocking + user dispensing | 1 at a time | 1 at a time (write is exclusive) |
-| User checking availability + admin reading report | Both block | Both read concurrently |
+| Admin read (report) | ReadLock | Just iterate (weakly consistent) |
+| Admin write (add/remove) | WriteLock | `put`/`remove` (atomic) |
+| User reads (isAvailable) | ReadLock | `get` (atomic) |
+| Complexity | High — lock/unlock in try/finally everywhere | Zero — just call methods |
+| Risk of deadlock | Possible if lock ordering violated | None — no explicit locks |
 
-**Rules of ReadWriteLock:**
-- Multiple threads can hold the **read lock** simultaneously
-- Only ONE thread can hold the **write lock**, and no readers allowed during it
-- Write lock waits for all current readers to finish before acquiring
-- `finally { unlock() }` ensures the lock is always released, even on exceptions
+`ReadWriteLock` is useful when you have **compound multi-key operations** that must be atomic. We don't have those here.
 
 ---
 
-### 4. `synchronized` on Rack Methods
+## 4. `AtomicInteger` with CAS Loop on Rack
 
 ```java
-public synchronized void dispense() {
-    if (quantity <= 0) {
-        throw new RuntimeException("Rack " + code + " is empty");
+private final AtomicInteger quantity;
+
+public void dispense() {
+    int current = quantity.get();
+    while (current > 0) {
+        if (quantity.compareAndSet(current, current - 1)) {
+            return;
+        }
+        current = quantity.get();
     }
-    quantity--;
+    throw new OutOfStockException(code);
 }
 
-public synchronized void restock(int amount) {
-    if (quantity + amount > maxCapacity) {
-        throw new RuntimeException("Restock exceeds max capacity");
+public void restock(int amount) {
+    int current = quantity.get();
+    while (true) {
+        int newVal = current + amount;
+        if (newVal > maxCapacity) {
+            throw new IllegalArgumentException("Exceeds max capacity");
+        }
+        if (quantity.compareAndSet(current, newVal)) {
+            return;
+        }
+        current = quantity.get();
     }
-    quantity += amount;
 }
 ```
 
-**Why:** Guards the rack's quantity field. The check-then-decrement must be atomic — without `synchronized`, admin could restock while dispense is mid-check, or two threads could both see quantity=1 and both try to decrement.
+**Why AtomicInteger over `synchronized`:**
 
----
+| Aspect | `synchronized` | `AtomicInteger` CAS |
+|---|---|---|
+| What it guards | Entire method body | Single int field |
+| Blocking | Yes — thread waits | No — thread retries (spin) |
+| Throughput under contention | Low — serial access | High — no context switch |
+| Correctness | check-then-act in one block | check-then-CAS (atomic) |
+| Complexity | Lower | Slightly higher (loop) |
 
-### 5. `ConcurrentHashMap` for Rack Storage
+The CAS loop is optimal here because:
+1. We only guard a single integer (quantity).
+2. Contention is low (dispense is already serialized by machine lock for users).
+3. Admin restock can proceed without blocking user dispense.
+4. No risk of deadlock — no locks held.
 
-```java
-private final ConcurrentHashMap<String, Rack> racks;
+**How CAS works:**
+```
+Thread A: read quantity=5, try CAS(5→4)  → succeeds, quantity=4
+Thread B: read quantity=5, try CAS(5→4)  → FAILS (expected 5, found 4)
+Thread B: retry: read quantity=4, try CAS(4→3) → succeeds, quantity=3
 ```
 
-**Why:** Even though we wrap access with ReadWriteLock for multi-step operations, using ConcurrentHashMap provides a safety net — individual get/put operations are inherently thread-safe. This prevents any edge cases where a thread accesses the map without holding the lock (defensive programming).
+---
+
+## 5. `ConcurrentHashMap` on ButtonPanel
+
+```java
+private final ConcurrentHashMap<String, Button> productButtons = new ConcurrentHashMap<>();
+
+public void addProductButton(String code) {
+    productButtons.put(code, new Button("SELECT " + code, () -> machine.selectProduct(code)));
+}
+
+public void pressProductButton(String code) {
+    Button button = productButtons.get(code);
+    if (button == null) { ... }
+    button.press();
+}
+```
+
+**Why:** Admin can add/remove product buttons while a user is interacting with the panel. CHM allows safe concurrent read (user pressing) and write (admin adding).
 
 ---
 
-## Where Multithreading is Relevant
+## Where Multithreading Is Relevant
 
 ### Scenario: Admin Restocks While User Purchases
 
@@ -139,78 +197,93 @@ Thread A (User)                          Thread B (Admin)
         |                                       |
         v                                       v
 machine.selectProduct("A1")              admin.restock("A1", 5)
-   [acquires machine lock]                      |  (BLOCKED on inventory write lock
-   state.selectProduct(...)                     |   if user is mid-dispense)
-   checks inventory.isAvailable("A1")           |
-      [acquires inventory read lock]            |
-      rack.isAvailable() → true                 |
-      [releases inventory read lock]            |
-   [releases machine lock]                      |
-        |                                       |
-        v                                       v
-machine.insertMoney(2.00)                inventory.restock("A1", 5)
-   [acquires machine lock]                 [acquires inventory write lock]
-   state.insertMoney(...)                  rack.restock(5)
-   [releases machine lock]                   [acquires rack lock]
-        |                                    quantity += 5
-        v                                    [releases rack lock]
-machine.dispense()                         [releases inventory write lock]
-   [acquires machine lock]                      |
-   state.dispense(...)                          v
-   inventory.dispenseItem("A1")            DONE — restock complete
-      [acquires inventory write lock]
-      rack.dispense()
-        [acquires rack lock]
-        quantity--
-        [releases rack lock]
-      [releases inventory write lock]
-   [releases machine lock]
+   [acquires machine monitor]                   |
+   state.selectProduct(...)                     |
+   inventory.isAvailable("A1")                  |  (NOT blocked — CHM.get is non-blocking)
+      → rack.isAvailable() → true              |
+   machine.setSelectedProduct(...)              |
+   machine.setState(HasMoney)                   |
+   [releases machine monitor]                   |
+        |                                       v
+        v                                  inventory.getRack("A1")  ← CHM.get, non-blocking
+machine.insertMoney(2.00)                  rack.restock(5)          ← AtomicInteger CAS
+   [acquires machine monitor]                  quantity: 5 → 10 ← CAS succeeds
+   state.insertMoney(...)                      |
+   balance += 2.00                             v
+   [releases machine monitor]              DONE — restock complete
+        |
+        v
+machine.dispense()
+   [acquires machine monitor]
+   state.dispense(...)
+   → charge payment
+   → rack.dispense()  ← AtomicInteger CAS: 10 → 9
+   → return change
+   → resetTransaction()
+   [releases machine monitor]
         |
         v
    DONE — item dispensed
 ```
 
-**Key insight:** The machine lock serializes user operations (select → insert → dispense is always atomic from the user's perspective). The inventory ReadWriteLock allows admin reads (reports) to happen concurrently with each other but serializes admin writes (restock, add/remove) against user dispensing.
+**Key insight:** The machine monitor serializes the user's transaction (select → insert → dispense is atomic). But admin operations (restock, add product) never need the machine monitor — they operate directly on Inventory (CHM) and Rack (AtomicInteger). Zero contention between admin and user paths.
 
 ---
 
-## Data Structures Used
+### Scenario: 10 Threads Competing for Same Product
+
+```
+Thread-0 through Thread-9 all call: machine.selectProduct("C1"), insertMoney(1.00), dispense()
+
+Since all are synchronized on machine:
+  Thread-0: acquires monitor → select → insert → dispense → release  (success)
+  Thread-1: acquires monitor → select → insert → dispense → release  (success)
+  Thread-2: acquires monitor → select → insert → dispense → release  (success)
+  ...
+  Thread-7: acquires monitor → select → "C1 out of stock" → release  (fails gracefully)
+  Thread-8: acquires monitor → select → "C1 out of stock" → release  (fails gracefully)
+  Thread-9: acquires monitor → select → "C1 out of stock" → release  (fails gracefully)
+```
+
+No double-dispense. No race condition. The `synchronized` ensures complete isolation of each transaction.
+
+---
+
+## Data Structures Summary
 
 | Data Structure | Where Used | Why This DS | Time Complexity |
 |---|---|---|---|
-| **ConcurrentHashMap** | `Inventory.racks` | Thread-safe map with high concurrency for independent keys. Defensive layer under ReadWriteLock. | O(1) get/put |
-| **ReentrantReadWriteLock** | `Inventory` | Allows multiple concurrent readers (availability checks, reports) while writers (dispense, restock) are exclusive. | O(1) lock/unlock |
-| **synchronized** | `VendingMachine` methods, `Rack` methods | Serializes state transitions and quantity mutations. Simple and correct for single-user machine. | O(1) |
-| **volatile** | `VendingMachine.instance` | Prevents partially-constructed singleton from being visible to other threads. | — |
-| **CountDownLatch** | `Main` (coordination) | One-shot barrier — main thread waits until N threads signal completion. | O(1) countDown/await |
-| **ExecutorService** | `Main` (thread management) | Reuses fixed set of threads for concurrent simulation. | — |
+| **ConcurrentHashMap** | `Inventory.racks`, `ButtonPanel.productButtons` | Lock-free single-key ops; concurrent read/write without explicit locks | O(1) amortized get/put |
+| **AtomicInteger** | `Rack.quantity` | CAS-based atomic decrement; no blocking, no deadlock risk | O(1) per CAS attempt |
+| **synchronized** | `VendingMachine` user methods | Serializes state machine transitions (simplest correct approach) | O(1) acquire/release |
+| **volatile** | `VendingMachine.instance` | Memory barrier for DCL singleton — prevents partial construction visibility | — |
+| **CountDownLatch** | `Main` (test coordination) | One-shot barrier — main waits for N threads to complete | O(1) countDown/await |
+| **ExecutorService** | `Main` (thread pool) | Reuses fixed thread set; avoids thread creation overhead | — |
 
 ---
 
-## How the Critical Path Works (User Purchase)
+## Why NOT These Alternatives
 
-```
-User Action          →  Machine Method (synchronized)  →  State Method  →  Inventory (RWLock)  →  Rack (synchronized)
-─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-selectProduct("A1")  →  machine.selectProduct()         →  IdleState     →  readLock: isAvailable  →  rack.isAvailable()
-insertMoney(2.00)    →  machine.insertMoney()           →  IdleState     →  (no inventory access)  →  —
-dispense()           →  machine.dispense()              →  HasMoneyState →  (transitions to DispensingState)
-                         machine.dispense()             →  DispensingState → writeLock: dispenseItem → rack.dispense()
-```
-
-The entire purchase is atomic from external perspective because `machine.selectProduct()`, `machine.insertMoney()`, and `machine.dispense()` are all `synchronized` on the same machine instance.
+| Alternative | Why Rejected |
+|---|---|
+| **RWLock on Inventory** | All operations are single-key — CHM handles this atomically. RWLock adds try/finally boilerplate with no benefit. |
+| **`synchronized` on Rack** | Only one int field to guard. AtomicInteger CAS is lock-free and non-blocking — better under admin-restock-during-user-dispense. |
+| **`synchronized` on Inventory** | Would block all readers during any write. CHM allows concurrent reads and writes to different keys. |
+| **StampedLock** | More performant than RWLock for read-heavy, but we eliminated the need for any explicit lock on Inventory entirely. |
+| **Lock-free state machine (AtomicReference)** | Transactions are multi-step (select → insert → dispense). CAS on state alone doesn't protect balance/selectedProduct mutations. Machine-level synchronized is simpler and correct. |
 
 ---
 
-## Summary Table
+## Critical Path Summary
 
-| Concern | Solution | DS/Mechanism |
-|---------|----------|---|
-| Two threads triggering state transition simultaneously | Serialize all user operations | `synchronized` on VendingMachine methods |
-| Admin restock during user dispense | Exclusive write access to inventory | `ReentrantReadWriteLock` write lock |
-| Multiple admins reading inventory concurrently | Shared read access | `ReentrantReadWriteLock` read lock |
-| Race on rack quantity (check-then-decrement) | Atomic quantity mutation | `synchronized` on Rack methods |
-| Partially constructed singleton | Memory visibility guarantee | `volatile` + Double-Checked Locking |
-| Defensive thread-safe map access | Concurrent map | `ConcurrentHashMap` |
-| Coordination in demo | Wait for N threads | `CountDownLatch` |
-| Thread reuse | Fixed pool | `ExecutorService` |
+```
+User Action          →  Lock Layer           →  Data Layer
+────────────────────────────────────────────────────────────────────
+selectProduct("A1")  →  machine monitor      →  CHM.get("A1"), AtomicInt.get()
+insertMoney(2.00)    →  machine monitor      →  (just balance += 2.00)
+dispense()           →  machine monitor      →  AtomicInt.CAS(n → n-1)
+restock("A1", 5)     →  (no machine lock!)   →  CHM.get("A1"), AtomicInt.CAS(n → n+5)
+addProduct("B3")     →  (no machine lock!)   →  CHM.put("B3", rack), CHM.put("B3", button)
+```
+
+Admin operations are **completely non-blocking** with respect to user operations. They never compete for the machine monitor.

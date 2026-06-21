@@ -9,21 +9,22 @@
 │  ┌──────────────┐    ┌──────────────────┐    ┌──────────────┐  │
 │  │  ButtonPanel  │───>│  VendingMachine   │<───│ AdminService  │  │
 │  │              │    │   (Singleton)     │    │              │  │
-│  │ - Product Btn│    │                  │    │ - addProduct  │  │
-│  │ - Insert Cash│    │  ┌────────────┐  │    │ - restock     │  │
-│  │ - Dispense   │    │  │   State    │  │    │ - remove      │  │
-│  │ - Cancel     │    │  │  Machine   │  │    └──────────────┘  │
-│  │ - Display    │    │  └────────────┘  │                      │
-│  └──────────────┘    │                  │                      │
-│                      │  ┌────────────┐  │    ┌──────────────┐  │
-│  ┌──────────────┐    │  │ Inventory  │  │    │  Payment     │  │
-│  │   Display    │<───│  └────────────┘  │───>│  Processor   │  │
-│  │              │    │                  │    │ (Strategy)   │  │
-│  │ - Products   │    │  ┌────────────┐  │    └──────────────┘  │
-│  │ - Balance    │    │  │  Dispense  │  │                      │
-│  │ - Errors     │    │  │  Strategy  │  │                      │
-│  │ - Messages   │    │  └────────────┘  │                      │
-│  └──────────────┘    └──────────────────┘                      │
+│  │ ┌──────────┐│    │                  │    │ - addProduct  │  │
+│  │ │  Button  ││    │  ┌────────────┐  │    │ - restock     │  │
+│  │ │ (Command)││    │  │   State    │  │    │ - remove      │  │
+│  │ └──────────┘│    │  │  Machine   │  │    └──────────────┘  │
+│  │ - Product   │    │  └────────────┘  │                      │
+│  │ - Dispense  │    │                  │                      │
+│  │ - Cancel    │    │  ┌────────────┐  │    ┌──────────────┐  │
+│  │ - Display   │    │  │ Inventory  │  │    │  Payment     │  │
+│  └──────────────┘    │  │(CHM+Atomic)│  │───>│  Processor   │  │
+│                      │  └────────────┘  │    │ (Strategy)   │  │
+│  ┌──────────────┐    │                  │    └──────────────┘  │
+│  │   Display    │<───│  ┌────────────┐  │                      │
+│  │  (Output)    │    │  │  Dispense  │  │    ┌──────────────┐  │
+│  └──────────────┘    │  │  Strategy  │  │    │  Exception   │  │
+│                      │  └────────────┘  │    │  Hierarchy   │  │
+│                      └──────────────────┘    └──────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -77,10 +78,10 @@
 
 | Action | IdleState | HasMoneyState | DispensingState |
 |--------|-----------|---------------|-----------------|
-| `selectProduct()` | Validate stock -> move to HasMoney | Error: already selected | Error: wait |
-| `insertMoney()` | Error: select first | Add to balance | Error: wait |
-| `dispense()` | Error: select & pay | Check funds -> dispense or error | Execute dispense -> Idle |
-| `cancel()` | No-op message | Refund balance -> Idle | Error: cannot cancel |
+| `selectProduct()` | Validate stock → move to HasMoney | Throw `IllegalStateTransitionException` | Throw `IllegalStateTransitionException` |
+| `insertMoney()` | Throw `IllegalStateTransitionException` | Add to balance, show balance | Throw `IllegalStateTransitionException` |
+| `dispense()` | Throw `IllegalStateTransitionException` | Check funds → dispense or throw | Execute dispense → Idle |
+| `cancel()` | No-op message | Refund balance → Idle | Throw `IllegalStateTransitionException` |
 
 ---
 
@@ -88,19 +89,21 @@
 
 ### 3.1 ButtonPanel (User Input Interface)
 
-Physical buttons the user interacts with. Each button delegates to `VendingMachine`.
+Physical panel with `Button` objects. Each button encapsulates an action (Command pattern via `Runnable`).
 
-| Button | Method | Triggers |
-|--------|--------|----------|
-| Product Code (A1, B1...) | `pressProductButton(code)` | `machine.selectProduct(code)` |
-| Insert Cash | `pressInsertCash(amount)` | `machine.insertMoney(amount)` |
-| Dispense | `pressDispense()` | `machine.dispense()` |
-| Cancel | `pressCancel()` | `machine.cancelTransaction()` |
-| Display Products | `pressDisplayProducts()` | `machine.displayProducts()` |
+| Component | Type | Action |
+|-----------|------|--------|
+| Product Buttons (A1, B1...) | `ConcurrentHashMap<String, Button>` | `machine.selectProduct(code)` |
+| Dispense Button | `Button` | `machine.dispense()` |
+| Cancel Button | `Button` | `machine.cancelTransaction()` |
+| Display Button | `Button` | `machine.displayProducts()` |
+| Coin Slot | Physical slot (not a button) | `machine.insertMoney(amount)` |
+
+Product buttons are dynamically registered via `addProductButton(code)` when admin adds products.
 
 ### 3.2 Display (Output Interface)
 
-All user-facing output goes through `Display`:
+All user-facing output goes through `Display`. Stateless — renders what it's told:
 
 | Method | When Shown |
 |--------|-----------|
@@ -108,7 +111,7 @@ All user-facing output goes through `Display`:
 | `showProducts(inventory)` | User presses display button |
 | `showMessage(msg)` | General info (selection confirmed, sufficient funds) |
 | `showInsertMoney(balance, required)` | After product selection / money inserted |
-| `showDispensing(productName)` | Item being dispensed |
+| `showDispenseSuccess(productName)` | Item dispensed successfully |
 | `showChange(amount)` | Overpaid, returning change |
 | `showRefund(amount)` | Transaction cancelled |
 | `showError(error)` | Invalid action or failure |
@@ -116,13 +119,13 @@ All user-facing output goes through `Display`:
 ### 3.3 Payment Processor (Strategy Pattern)
 
 ```
-PaymentProcessorInterface
+PaymentProcessor
 ├── CashPaymentProcessor   (physical coins/notes)
 └── CardPaymentProcessor   (card tap/swipe)
 ```
 
 Both implement:
-- `process(amount)` — charge the user
+- `charge(amount)` — charge the user
 - `refund(amount)` — return money (change or cancellation)
 
 Machine can swap processor at runtime via `setPaymentProcessor()`.
@@ -130,11 +133,24 @@ Machine can swap processor at runtime via `setPaymentProcessor()`.
 ### 3.4 Dispense Strategy (Strategy Pattern)
 
 ```
-ItemDispenseStrategy
-└── StandardDispenseStrategy   (decrement rack, release item)
+DispenseStrategy
+└── StandardDispenseStrategy   (decrement rack via AtomicInteger, release item)
 ```
 
 Extensible for future strategies (e.g., fragile item handling, temperature-controlled).
+
+### 3.5 Exception Hierarchy
+
+```
+VendingMachineException (RuntimeException)
+├── InvalidProductException        — unknown product code
+├── OutOfStockException            — rack is empty
+├── InsufficientFundsException     — balance < price
+├── PaymentFailedException         — processor returned false
+└── IllegalStateTransitionException — action invalid in current state
+```
+
+States throw typed exceptions for invalid operations. The caller (`Main` or controller) catches `VendingMachineException` at the boundary.
 
 ---
 
@@ -147,17 +163,16 @@ User            ButtonPanel       VendingMachine     IdleState        HasMoneySt
  │                  │                  │                │                  │                  │              │            │              │
  │─press Display───>│                  │                │                  │                  │              │            │              │
  │                  │──displayProducts()─>              │                  │                  │              │            │              │
- │                  │                  │                │                  │                  │──getReport()─>│            │              │
- │                  │                  │                │                  │                  │              │──showProducts()──>         │
+ │                  │                  │────────────────────────────────────────────────────────────────────>showProducts()              │
  │                  │                  │                │                  │                  │              │            │              │
  │─press "A1"─────>│                  │                │                  │                  │              │            │              │
  │                  │──selectProduct("A1")──────────────>                  │                  │              │            │              │
  │                  │                  │                │─isAvailable("A1")────────────────────────────────>│            │              │
  │                  │                  │                │<──true───────────────────────────────────────────│            │              │
- │                  │                  │                │─setSelectedProduct()─>                │              │            │              │
+ │                  │                  │                │─setSelectedProduct()                  │              │            │              │
  │                  │                  │                │─────────────────────────────────────────────────────────────>showMessage()     │
  │                  │                  │                │─────────────────────────────────────────────────────────────>showInsertMoney() │
- │                  │                  │                │─setState(HasMoney)──>                 │              │            │              │
+ │                  │                  │                │─setState(HasMoney)                    │              │            │              │
  │                  │                  │                │                  │                  │              │            │              │
  │─insert $1.00───>│                  │                │                  │                  │              │            │              │
  │                  │──insertMoney(1.00)────────────────────────────────>  │                  │              │            │              │
@@ -167,22 +182,20 @@ User            ButtonPanel       VendingMachine     IdleState        HasMoneySt
  │─insert $1.00───>│                  │                │                  │                  │              │            │              │
  │                  │──insertMoney(1.00)────────────────────────────────>  │                  │              │            │              │
  │                  │                  │                │                  │─addBalance(1.00)  │              │            │              │
- │                  │                  │                │                  │─────────────────────────────────────────────>showInsertMoney()
  │                  │                  │                │                  │─────────────────────────────────────────────>showMessage("Sufficient funds")
  │                  │                  │                │                  │                  │              │            │              │
  │─press Dispense─>│                  │                │                  │                  │              │            │              │
  │                  │──dispense()──────────────────────────────────────>  │                  │              │            │              │
  │                  │                  │                │                  │─balance>=price?  │              │            │              │
- │                  │                  │                │                  │──────────────────────────────────────────────────────────>process(1.50)
+ │                  │                  │                │                  │──────────────────────────────────────────────────────────>charge(1.50)
  │                  │                  │                │                  │<─────────────────────────────────────────────────────────true
  │                  │                  │                │                  │─setState(Dispensing)───────────>│              │            │
  │                  │                  │                │                  │                  │              │            │              │
- │                  │                  │──dispense()────────────────────────────────────────>│              │            │              │
- │                  │                  │                │                  │                  │─dispenseItem()─>           │              │
- │                  │                  │                │                  │                  │──────────────────────────>showDispensing()│
- │                  │                  │                │                  │                  │──────────────────────────>showChange($0.50)
- │                  │                  │                │                  │                  │─setState(Idle)─>           │              │
- │                  │                  │                │                  │                  │──────────────────────────>showWelcome()   │
+ │                  │                  │                │                  │                  │─rack.dispense()─>          │              │
+ │                  │                  │                │                  │                  │──────────────────────────────────────────>refund($0.50)
+ │                  │                  │                │                  │                  │──────────────────────────>showChange()   │
+ │                  │                  │                │                  │                  │──────────────────────────>showDispenseSuccess()
+ │                  │                  │                │                  │                  │─resetTransaction()         │              │
  │<─────────────────────────── Item + $0.50 change ────────────────────────────────────────────────────────────────────────────────────│
 ```
 
@@ -206,9 +219,7 @@ User            ButtonPanel       VendingMachine       IdleState       HasMoneyS
  │─press Cancel───>│                  │                  │               │               │              │
  │                  │──cancelTransaction()───────────────────────────────>               │              │
  │                  │                  │                  │               │─────────────────────────────>refund($1.00)
- │                  │                  │                  │               │─resetBalance() │              │
- │                  │                  │                  │               │─setSelectedProduct(null)       │
- │                  │                  │                  │               │─setState(Idle) │              │
+ │                  │                  │                  │               │─resetTransaction()            │
  │                  │                  │                  │               │──────────────>showRefund($1.00)
  │                  │                  │                  │               │──────────────>showWelcome()   │
  │<──────────────────────────── $1.00 refunded ──────────────────────────────────────────────────────────│
@@ -224,8 +235,8 @@ User            ButtonPanel       VendingMachine       HasMoneyState     Display
  │─press Dispense─>│                  │                    │               │              │
  │                  │──dispense()──────────────────────────>│               │              │
  │                  │                  │                    │─balance<price │              │
- │                  │                  │                    │──────────────>showError("Insufficient funds")
- │                  │                  │                    │──────────────>showMessage("Insert more or CANCEL")
+ │                  │                  │                    │─throw InsufficientFundsException
+ │                  │                  │  (caught at boundary, display error)│              │
  │                  │                  │                    │  (stays in HasMoneyState)    │
  │                  │                  │                    │               │              │
  │─insert $1.00───>│                  │                    │               │              │
@@ -237,7 +248,7 @@ User            ButtonPanel       VendingMachine       HasMoneyState     Display
  │─press Dispense─>│                  │                    │               │              │
  │                  │──dispense()──────────────────────────>│               │              │
  │                  │                  │                    │─balance>=price│              │
- │                  │                  │                    │─────────────────────────────>process($2.00)
+ │                  │                  │                    │─────────────────────────────>charge($2.00)
  │                  │                  │                    │  ... (proceeds to dispensing) │
 ```
 
@@ -251,66 +262,43 @@ User            ButtonPanel       VendingMachine       IdleState       Inventory
  │                  │                  │                  │─isAvailable("A2")──>         │
  │                  │                  │                  │<──false──────│              │
  │                  │                  │                  │─────────────────────────────>showError("Out of stock")
- │                  │                  │                  │─────────────────────────────>showWelcome()
  │                  │                  │                  │  (remains in IdleState)      │
  │<─────────────────────── "Product A2 is out of stock" ──────────────────────────────────│
 ```
 
-### Flow 5: Invalid Actions (Error Handling)
+### Flow 5: Invalid Actions (Exception-based)
 
 ```
-User            ButtonPanel       VendingMachine       IdleState        Display
+User            ButtonPanel       VendingMachine       IdleState        Caller
  │                  │                  │                  │               │
  │─insert $1.00───>│  (no product selected)              │               │
  │                  │──insertMoney(1.00)────────────────>│               │
- │                  │                  │                  │──────────────>showError("Select product first")
+ │                  │                  │                  │─throw IllegalStateTransitionException("insert money", "IDLE")
+ │                  │                  │                  │               │─catch → display error
  │                  │                  │                  │               │
  │─press Dispense─>│  (no product, no money)             │               │
  │                  │──dispense()──────────────────────>│               │
- │                  │                  │                  │──────────────>showError("Select product and insert money")
- │                  │                  │                  │               │
- │─press Cancel───>│  (no transaction)                   │               │
- │                  │──cancelTransaction()──────────────>│               │
- │                  │                  │                  │──────────────>showMessage("No transaction in progress")
+ │                  │                  │                  │─throw IllegalStateTransitionException("dispense", "IDLE")
+ │                  │                  │                  │               │─catch → display error
 ```
 
-### Flow 6: Card Payment
+### Flow 6: Concurrent Access (Thread Safety)
 
 ```
-User            ButtonPanel       VendingMachine       HasMoneyState    CardPaymentProcessor    Display
- │                  │                  │                    │                  │                  │
- │  (Admin sets CardPaymentProcessor on machine)           │                  │                  │
- │                  │                  │                    │                  │                  │
- │─press "C1"─────>│                  │                    │                  │                  │
- │                  │──selectProduct("C1")──>               │                  │                  │
- │                  │                  │  (transitions to HasMoney)            │                  │
- │                  │                  │                    │                  │                  │
- │─insert $2.00───>│                  │                    │                  │                  │
- │                  │──insertMoney(2.00)───────────────────>│                  │                  │
- │                  │                  │                    │                  │                  │
- │─press Dispense─>│                  │                    │                  │                  │
- │                  │──dispense()──────────────────────────>│                  │                  │
- │                  │                  │                    │─────────────────>process($1.00)     │
- │                  │                  │                    │<────────────────true                │
- │                  │                  │                    │  ... (dispense + change via card refund)
- │                  │                  │                    │─────────────────>refund($1.00)      │
-```
-
-### Flow 7: Re-selection During Transaction (Blocked)
-
-```
-User            ButtonPanel       VendingMachine       HasMoneyState     Display
- │                  │                  │                    │               │
- │  (C1 selected, $0.50 inserted)      │                    │               │
- │                  │                  │                    │               │
- │─press "B1"─────>│                  │                    │               │
- │                  │──selectProduct("B1")─────────────────>│               │
- │                  │                  │                    │──────────────>showError("Product already selected")
- │                  │                  │                    │  (stays in HasMoneyState with C1)   │
- │                  │                  │                    │               │
- │─press Cancel───>│  (must cancel first to reselect)      │               │
- │                  │──cancelTransaction()─────────────────>│               │
- │                  │                  │                    │  ... (refund, reset to Idle)        │
+Thread-1          Thread-2          VendingMachine (synchronized)
+  │                  │                  │
+  │─selectProduct()─>│                  │
+  │                  │─selectProduct()─>│
+  │                  │                  │── Thread-1 acquires monitor
+  │                  │                  │── Thread-1: select → HasMoney
+  │                  │                  │── Thread-1 releases monitor
+  │                  │                  │── Thread-2 acquires monitor
+  │                  │                  │── Thread-2: throw IllegalStateTransition (already in HasMoney)
+  │                  │                  │── Thread-2 releases monitor
+  │─insertMoney()──>│                  │
+  │                  │                  │── Thread-1 acquires monitor
+  │                  │                  │── Thread-1: add balance
+  │                  │                  │── ...serialized access continues...
 ```
 
 ---
@@ -321,18 +309,19 @@ User            ButtonPanel       VendingMachine       HasMoneyState     Display
 |---|---|---|---|---|
 | Idle | selectProduct(code) | Stock available | Set product, show price | HasMoney |
 | Idle | selectProduct(code) | Out of stock | Show error | Idle |
-| Idle | insertMoney() | — | Show error | Idle |
-| Idle | dispense() | — | Show error | Idle |
+| Idle | insertMoney() | — | Throw `IllegalStateTransitionException` | Idle |
+| Idle | dispense() | — | Throw `IllegalStateTransitionException` | Idle |
 | Idle | cancel() | — | Show "no transaction" | Idle |
-| HasMoney | selectProduct() | — | Show error (already selected) | HasMoney |
+| HasMoney | selectProduct() | — | Throw `IllegalStateTransitionException` | HasMoney |
 | HasMoney | insertMoney(amt) | — | Add to balance, show balance | HasMoney |
-| HasMoney | dispense() | balance < price | Show insufficient funds | HasMoney |
-| HasMoney | dispense() | balance >= price | Process payment, transition | Dispensing |
-| HasMoney | cancel() | — | Refund balance, clear selection | Idle |
+| HasMoney | dispense() | balance < price | Throw `InsufficientFundsException` | HasMoney |
+| HasMoney | dispense() | balance >= price, payment ok | Charge, transition | Dispensing |
+| HasMoney | dispense() | payment fails | Throw `PaymentFailedException` | HasMoney |
+| HasMoney | cancel() | — | Refund balance, reset | Idle |
 | Dispensing | dispense() | — | Dispense item, return change, reset | Idle |
-| Dispensing | selectProduct() | — | Show error (wait) | Dispensing |
-| Dispensing | insertMoney() | — | Show error (wait) | Dispensing |
-| Dispensing | cancel() | — | Show error (cannot cancel) | Dispensing |
+| Dispensing | selectProduct() | — | Throw `IllegalStateTransitionException` | Dispensing |
+| Dispensing | insertMoney() | — | Throw `IllegalStateTransitionException` | Dispensing |
+| Dispensing | cancel() | — | Throw `IllegalStateTransitionException` | Dispensing |
 
 ---
 
@@ -340,67 +329,103 @@ User            ButtonPanel       VendingMachine       HasMoneyState     Display
 
 | Pattern | Where | Why |
 |---------|-------|-----|
-| **Singleton** | `VendingMachine` | One physical machine instance |
-| **State** | `IdleState`, `HasMoneyState`, `DispensingState` | Clean transitions without conditionals |
-| **Strategy** | `PaymentProcessorInterface`, `ItemDispenseStrategy` | Swap payment/dispense behavior at runtime |
-| **Facade** | `ButtonPanel` | Simple interface hiding machine complexity |
-| **Composition** | `VendingMachine -> Inventory -> Rack -> Product` | Strong ownership hierarchy |
+| **Singleton** | `VendingMachine` (DCL + volatile) | One physical machine instance per JVM |
+| **State** | `IdleState`, `HasMoneyState`, `DispensingState` | Clean transitions; invalid actions throw exceptions |
+| **Strategy** | `PaymentProcessor`, `DispenseStrategy` | Swap payment/dispense behavior at runtime |
+| **Command** | `Button` wrapping `Runnable` | Decouples button press from action execution |
+| **Immutable Value** | `Product` (final, validated) | Thread-safe, no defensive copies needed |
 
 ---
 
-## 7. Thread Safety
+## 7. Thread Safety Model
 
-| Component | Mechanism | Reason |
-|-----------|-----------|--------|
-| `VendingMachine` | `synchronized` methods | Single user interacts at a time |
-| `VendingMachine` (singleton) | Double-checked locking + `volatile` | Safe lazy init |
-| `Inventory` | `ReentrantReadWriteLock` | Admin reads/writes concurrent with user reads |
-| `Rack` | `synchronized` methods | Atomic quantity operations |
+| Component | Mechanism | What It Protects |
+|-----------|-----------|-----------------|
+| `VendingMachine` user-facing methods | `synchronized(this)` | State machine transitions — only one thread can mutate transaction state |
+| `VendingMachine` singleton init | DCL + `volatile` | Safe lazy initialization |
+| `Inventory.racks` | `ConcurrentHashMap` | Admin add/remove concurrent with user reads |
+| `Rack.quantity` | `AtomicInteger` + CAS loop | Lock-free stock decrement under contention |
+| `ButtonPanel.productButtons` | `ConcurrentHashMap` | Dynamic button registration while panel is in use |
+| Strategy setters | `synchronized` | Safe admin reconfiguration |
+
+### Why this model (no redundant locks):
+- Machine-level `synchronized` serializes user transactions. Within a transaction, no contention on state/balance/selectedProduct — only one thread touches them.
+- `Inventory` uses `ConcurrentHashMap` (not RWLock) because operations are single-key lookups — no compound read-then-write that spans multiple keys.
+- `Rack` uses `AtomicInteger` because the CAS-loop `dispense()` is a single atomic decrement — no need for a heavier lock.
+- No double-locking. Each layer protects exactly what it owns.
 
 ---
 
 ## 8. File Structure
 
 ```
-VendingMachine/
-├── Main.java                          # Demo driver with all flows
-├── enums/
-│   ├── MachineStateType.java          # IDLE, HAS_MONEY, DISPENSING
-│   └── PaymentMethod.java             # CASH, CARD
-└── models/
-    ├── VendingMachine.java            # Core singleton, delegates to state
-    ├── ButtonPanel.java               # User input facade
-    ├── Display.java                   # All user-facing output
-    ├── Inventory.java                 # Thread-safe rack management
-    ├── Rack.java                      # Slot holding product + quantity
-    ├── Product.java                   # Name, price, code
-    ├── AdminService.java              # Admin operations
-    ├── State/
-    │   ├── VendingMachineState.java   # State interface
-    │   ├── IdleState.java             # Waiting for selection
-    │   ├── HasMoneyState.java         # Accepting money / ready to dispense
-    │   └── DispensingState.java       # Releasing item
-    ├── PaymentProcessor/
-    │   ├── PaymentProcessorInterface.java  # Strategy interface
-    │   ├── CashPaymentProcessor.java       # Physical cash
-    │   └── CardPaymentProcessor.java       # Card payment
-    └── ItemDispenseStrategy/
-        ├── ItemDispenseStrategy.java       # Strategy interface
-        └── StandardDispenseStrategy.java   # Default rack dispense
+src/
+├── Main.java                            # Demo driver with all flows + concurrency test
+├── exception/
+│   ├── VendingMachineException.java     # Base exception
+│   ├── InvalidProductException.java     # Unknown product code
+│   ├── OutOfStockException.java         # Rack is empty
+│   ├── InsufficientFundsException.java  # balance < price
+│   ├── PaymentFailedException.java      # Processor returned false
+│   └── IllegalStateTransitionException.java  # Invalid action in state
+├── model/
+│   ├── VendingMachine.java              # Core singleton, state machine, transaction state
+│   ├── Button.java                      # Command pattern — label + Runnable
+│   ├── ButtonPanel.java                 # Physical panel with dynamic product buttons
+│   ├── Display.java                     # Stateless output renderer
+│   ├── Inventory.java                   # ConcurrentHashMap of racks
+│   ├── Rack.java                        # AtomicInteger quantity + CAS dispense
+│   ├── Product.java                     # Immutable value object
+│   └── AdminService.java               # Admin operations (add/remove/restock)
+├── state/
+│   ├── VendingMachineState.java         # State interface
+│   ├── IdleState.java                   # Waiting for product selection
+│   ├── HasMoneyState.java              # Accepting money / validating funds
+│   └── DispensingState.java            # Releasing item + change
+├── payment/
+│   ├── PaymentProcessor.java            # Strategy interface (charge/refund)
+│   ├── CashPaymentProcessor.java        # Physical cash handling
+│   └── CardPaymentProcessor.java        # Card payment handling
+└── dispense/
+    ├── DispenseStrategy.java            # Strategy interface
+    └── StandardDispenseStrategy.java    # Default rack dispense
 ```
 
 ---
 
-## 9. Key Design Decisions
+## 9. Dependency Flow (No Cycles)
 
-1. **State pattern over switch-case**: Each state encapsulates its own transition logic. Adding a new state (e.g., `MaintenanceState`) requires zero changes to existing states.
+```
+Main
+ ├── model.VendingMachine
+ │    ├── model.Inventory → model.Rack → model.Product
+ │    ├── model.Display
+ │    ├── model.ButtonPanel → model.Button
+ │    ├── state.* (via interface, method param only)
+ │    ├── payment.* (via interface)
+ │    └── dispense.* (via interface)
+ ├── model.AdminService → model.VendingMachine
+ └── exception.* (thrown by states, caught at boundaries)
+```
 
-2. **ButtonPanel as facade**: Users don't interact with the machine directly. The panel validates nothing — it simply translates physical button presses into machine method calls. The state handles validation.
+States reference `VendingMachine` only as a method parameter — no ownership, no circular dependency.
 
-3. **Display is passive**: The machine/state pushes messages to Display. Display never queries state — it just renders what it's told.
+---
 
-4. **Payment processed at dispense time, not insert time**: Money is accumulated (`addBalance`) and only charged via the processor when the user confirms with Dispense. This simplifies cancellation (just reset balance).
+## 10. Key Design Decisions
 
-5. **Cancellation always returns to Idle**: No partial states. Cancel clears everything — selected product, balance — and refunds via the active payment processor.
+1. **State belongs to the machine, not a "User"**: A vending machine transitions between idle/accepting/dispensing. The "user" is whoever is pressing buttons — they don't hold machine state. This eliminates the circular dependency (`Machine → User → State → Machine`).
 
-6. **Double-dispatch for dispensing**: `HasMoneyState.dispense()` validates funds and transitions to `DispensingState`, then calls `machine.dispense()` again. The `DispensingState.dispense()` does the actual physical dispensing. This separates payment validation from item release.
+2. **Exceptions over error codes**: Invalid state transitions throw typed exceptions (`IllegalStateTransitionException`). This makes the state contract explicit — callers must handle errors, and illegal transitions can't be silently ignored.
+
+3. **Transaction state on the machine**: `balance` and `selectedProduct` are ephemeral transaction fields on `VendingMachine`, reset atomically via `resetTransaction()`. No separate "session" or "transaction" object needed for a single-user-at-a-time physical machine.
+
+4. **CAS over locks for Rack quantity**: `AtomicInteger` with a compare-and-set loop is sufficient for a single-field atomic decrement. No need for a `synchronized` block or `ReentrantLock` — those would add contention in a concurrent-restock scenario.
+
+5. **ConcurrentHashMap over RWLock for Inventory**: Single-key operations (get, put, remove) are inherently atomic in CHM. No compound operations span multiple keys, so RWLock adds complexity without benefit.
+
+6. **Button as Command pattern**: Each `Button` wraps a `Runnable`. The panel doesn't know what actions do — it just stores and invokes commands. This means adding a new button type requires zero changes to `ButtonPanel`.
+
+7. **Payment charged at dispense time, not insert time**: Money is accumulated (`addBalance`) and only processed via `PaymentProcessor.charge()` when the user confirms with Dispense. Cancellation simply resets balance and refunds — no reversal complexity.
+
+8. **Double-dispatch for dispensing**: `HasMoneyState.dispense()` validates funds and charges payment, then transitions to `DispensingState` and immediately calls `dispense()` on it. `DispensingState.dispense()` does the physical dispensing. This separates payment validation from item release into distinct, single-responsibility states.
