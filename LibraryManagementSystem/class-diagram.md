@@ -2,18 +2,13 @@
 
 ---
 
-## Step 1 — Core Domain
+## Step 1 — Core Domain (Books Only)
+
+> `Book` is the logical entity (title, ISBN, metadata).  
+> `BookItem` is a physical copy of a `Book` — borrow/return operates on `BookItem`.
 
 ```mermaid
 classDiagram
-    class BookFormat {
-        <<enumeration>>
-        PHYSICAL
-        EBOOK
-        JOURNAL
-        AUDIO_BOOK
-    }
-
     class BookItemStatus {
         <<enumeration>>
         AVAILABLE
@@ -23,8 +18,7 @@ classDiagram
         DAMAGED
     }
 
-    class LibraryItem {
-        <<abstract>>
+    class Book {
         +String isbn
         +String title
         +List~String~ authors
@@ -32,29 +26,8 @@ classDiagram
         +String publisher
         +String language
         +String edition
-        +BookFormat format
-    }
-
-    class Book {
         +List~BookItem~ copies
         +getAvailableCopy() BookItem
-    }
-
-    class EBook {
-        +String downloadUrl
-        +int maxConcurrentBorrows
-        +int activeBorrows
-    }
-
-    class Journal {
-        +String volume
-        +String issueNumber
-        +LocalDate publishDate
-    }
-
-    class AudioBook {
-        +String narratorName
-        +int durationMinutes
     }
 
     class BookItem {
@@ -74,11 +47,6 @@ classDiagram
         +String position
     }
 
-    LibraryItem <|-- Book
-    LibraryItem <|-- EBook
-    LibraryItem <|-- Journal
-    LibraryItem <|-- AudioBook
-    LibraryItem --> BookFormat
     Book "1" *-- "1..*" BookItem : has copies
     BookItem "1" *-- "1" RackLocation : located at
     BookItem --> BookItemStatus
@@ -122,9 +90,6 @@ classDiagram
 
     class Librarian {
         +String employeeId
-        +addBook(Book)
-        +removeBook(String isbn)
-        +updateBook(Book)
         +suspendMember(String memberId)
         +reactivateMember(String memberId)
         +blacklistMember(String memberId)
@@ -292,8 +257,6 @@ classDiagram
         +String author
         +String isbn
         +String genre
-        +String subject
-        +BookFormat format
         +boolean availableOnly
         +int page
         +int pageSize
@@ -301,7 +264,7 @@ classDiagram
 
     class SearchService {
         <<interface>>
-        +search(SearchCriteria) List~LibraryItem~
+        +search(SearchCriteria) List~Book~
     }
 
     class CatalogSearchService {
@@ -309,7 +272,7 @@ classDiagram
         +Map~String, List~Book~~ byAuthor
         +Map~String, Book~ byISBN
         +Map~String, List~Book~~ byGenre
-        +search(SearchCriteria) List~LibraryItem~
+        +search(SearchCriteria) List~Book~
         +indexBook(Book)
         +removeBook(String isbn)
     }
@@ -321,12 +284,64 @@ classDiagram
 
 ---
 
-## Step 7 — Services
+## Step 7 — Book Service
+
+> `BookService` is the single entry point for managing the book catalog.  
+> Added books are persisted via `BookRepository` (in-memory map or DB-backed).  
+> `CatalogSearchService` is kept in sync — index updated on add, removed on delete.
+
+```mermaid
+classDiagram
+    class BookService {
+        -BookRepository bookRepository
+        -CatalogSearchService catalogSearchService
+        +addBook(Book) Book
+        +addBookItem(String isbn, BookItem) BookItem
+        +deleteBook(String isbn)
+        +deleteBookItem(String barcode)
+        +getBook(String isbn) Book
+        +getAllBooks() List~Book~
+        +search(SearchCriteria) List~Book~
+    }
+
+    class BookRepository {
+        <<interface>>
+        +save(Book) Book
+        +findByIsbn(String isbn) Book
+        +findAll() List~Book~
+        +delete(String isbn)
+        +saveBookItem(BookItem) BookItem
+        +findBookItemByBarcode(String barcode) BookItem
+        +deleteBookItem(String barcode)
+    }
+
+    class InMemoryBookRepository {
+        -Map~String, Book~ bookStore
+        -Map~String, BookItem~ bookItemStore
+        +save(Book) Book
+        +findByIsbn(String isbn) Book
+        +findAll() List~Book~
+        +delete(String isbn)
+        +saveBookItem(BookItem) BookItem
+        +findBookItemByBarcode(String barcode) BookItem
+        +deleteBookItem(String barcode)
+    }
+
+    BookRepository <|.. InMemoryBookRepository
+    BookService --> BookRepository : persists via
+    BookService --> CatalogSearchService : keeps index in sync
+    InMemoryBookRepository --> Book : stores in bookStore
+    InMemoryBookRepository --> BookItem : stores in bookItemStore
+```
+
+---
+
+## Step 8 — Services
 
 ```mermaid
 classDiagram
     class BorrowService {
-        -SearchService searchService
+        -BookRepository bookRepository
         -NotificationDispatcher notificationDispatcher
         -FineStrategyFactory fineStrategyFactory
         -BookLendingRepository lendingRepo
@@ -371,7 +386,7 @@ classDiagram
         +getFineHistory(String memberId) List~Fine~
     }
 
-    BorrowService --> SearchService
+    BorrowService --> BookRepository
     BorrowService --> NotificationDispatcher
     BorrowService --> FineStrategyFactory
     BorrowService --> BookLendingRepository
@@ -388,7 +403,7 @@ classDiagram
 
 ---
 
-## Step 8 — Infrastructure
+## Step 9 — Infrastructure
 
 ```mermaid
 classDiagram
@@ -422,50 +437,33 @@ classDiagram
         +remove(String reservationId)
     }
 
-    class Branch {
-        +String branchId
-        +String name
-        +Address address
-        +CatalogSearchService catalog
-        +List~Librarian~ staff
-    }
-
     class Library {
         <<singleton>>
         -static Library instance
-        +List~Branch~ branches
-        +MemberService memberService
+        +BookService bookService
         +BorrowService borrowService
         +ReturnService returnService
         +ReservationService reservationService
         +FineService fineService
+        +MemberService memberService
         +static getInstance() Library
     }
 
-    Library "1" *-- "1..*" Branch
+    Library --> BookService
     Library --> BorrowService
     Library --> ReturnService
     Library --> ReservationService
     Library --> FineService
     Library --> MemberService
-    Branch "1" *-- "1" CatalogSearchService
-    Branch "1" o-- "0..*" Librarian
     ReservationQueue "1" --> "0..*" BookReservation
 ```
 
 ---
 
-## Step 9 — Full Combined Diagram
+## Step 10 — Full Combined Diagram
 
 ```mermaid
 classDiagram
-    class BookFormat {
-        <<enumeration>>
-        PHYSICAL
-        EBOOK
-        JOURNAL
-        AUDIO_BOOK
-    }
     class BookItemStatus {
         <<enumeration>>
         AVAILABLE
@@ -498,33 +496,17 @@ classDiagram
         EMAIL
         SMS
     }
-    class LibraryItem {
-        <<abstract>>
+
+    class Book {
         +String isbn
         +String title
         +List~String~ authors
         +String genre
         +String publisher
         +String language
-        +BookFormat format
-    }
-    class Book {
+        +String edition
         +List~BookItem~ copies
         +getAvailableCopy() BookItem
-    }
-    class EBook {
-        +String downloadUrl
-        +int maxConcurrentBorrows
-        +int activeBorrows
-    }
-    class Journal {
-        +String volume
-        +String issueNumber
-        +LocalDate publishDate
-    }
-    class AudioBook {
-        +String narratorName
-        +int durationMinutes
     }
     class BookItem {
         +String barcode
@@ -540,6 +522,7 @@ classDiagram
         +String shelf
         +String position
     }
+
     class Person {
         <<abstract>>
         +String id
@@ -556,11 +539,10 @@ classDiagram
     }
     class Librarian {
         +String employeeId
-        +addBook(Book)
-        +removeBook(String isbn)
         +suspendMember(String memberId)
         +waiveFine(Fine)
     }
+
     class BookLending {
         +String lendingId
         +LocalDate issueDate
@@ -591,6 +573,7 @@ classDiagram
         +LocalDateTime timestamp
         +String performedBy
     }
+
     class FineStrategy {
         <<interface>>
         +calculate(BookLending) double
@@ -609,6 +592,7 @@ classDiagram
     class FineStrategyFactory {
         +getStrategy(MemberTier) FineStrategy
     }
+
     class NotificationService {
         <<interface>>
         +notify(Member, String, NotificationChannel)
@@ -623,6 +607,7 @@ classDiagram
         +Map~NotificationChannel, NotificationService~ handlers
         +dispatch(Member, String message)
     }
+
     class SearchCriteria {
         +String title
         +String author
@@ -634,16 +619,50 @@ classDiagram
     }
     class SearchService {
         <<interface>>
-        +search(SearchCriteria) List~LibraryItem~
+        +search(SearchCriteria) List~Book~
     }
     class CatalogSearchService {
         +Map~String, List~Book~~ byTitle
         +Map~String, Book~ byISBN
         +Map~String, List~Book~~ byGenre
-        +search(SearchCriteria) List~LibraryItem~
+        +search(SearchCriteria) List~Book~
         +indexBook(Book)
         +removeBook(String isbn)
     }
+
+    class BookRepository {
+        <<interface>>
+        +save(Book) Book
+        +findByIsbn(String) Book
+        +findAll() List~Book~
+        +delete(String isbn)
+        +saveBookItem(BookItem) BookItem
+        +findBookItemByBarcode(String) BookItem
+        +deleteBookItem(String barcode)
+    }
+    class InMemoryBookRepository {
+        -Map~String, Book~ bookStore
+        -Map~String, BookItem~ bookItemStore
+        +save(Book) Book
+        +findByIsbn(String) Book
+        +findAll() List~Book~
+        +delete(String isbn)
+        +saveBookItem(BookItem) BookItem
+        +findBookItemByBarcode(String) BookItem
+        +deleteBookItem(String barcode)
+    }
+    class BookService {
+        -BookRepository bookRepository
+        -CatalogSearchService catalogSearchService
+        +addBook(Book) Book
+        +addBookItem(String isbn, BookItem) BookItem
+        +deleteBook(String isbn)
+        +deleteBookItem(String barcode)
+        +getBook(String isbn) Book
+        +getAllBooks() List~Book~
+        +search(SearchCriteria) List~Book~
+    }
+
     class BorrowService {
         +borrowBook(Member, String barcode) BookLending
         +validateMember(Member)
@@ -668,6 +687,7 @@ classDiagram
         +reactivate(String memberId)
         +blacklist(String memberId)
     }
+
     class BookLendingRepository {
         <<interface>>
         +save(BookLending)
@@ -689,23 +709,12 @@ classDiagram
         +dequeue(String isbn) BookReservation
         +remove(String reservationId)
     }
-    class Branch {
-        +String branchId
-        +String name
-        +CatalogSearchService catalog
-    }
     class Library {
         <<singleton>>
         -static Library instance
-        +List~Branch~ branches
         +static getInstance() Library
     }
 
-    LibraryItem <|-- Book
-    LibraryItem <|-- EBook
-    LibraryItem <|-- Journal
-    LibraryItem <|-- AudioBook
-    LibraryItem --> BookFormat
     Book "1" *-- "1..*" BookItem
     BookItem "1" *-- "1" RackLocation
     BookItem --> BookItemStatus
@@ -734,7 +743,10 @@ classDiagram
     NotificationDispatcher --> NotificationService
     NotificationDispatcher --> NotificationChannel
     SearchService <|.. CatalogSearchService
-    BorrowService --> SearchService
+    BookRepository <|.. InMemoryBookRepository
+    BookService --> BookRepository : persists via
+    BookService --> CatalogSearchService : keeps index in sync
+    BorrowService --> BookRepository
     BorrowService --> NotificationDispatcher
     BorrowService --> FineStrategyFactory
     BorrowService --> BookLendingRepository
@@ -747,13 +759,11 @@ classDiagram
     FineService --> FineRepository
     FineService --> FineStrategyFactory
     MemberService --> MemberRepository
-    Library "1" *-- "1..*" Branch
+    Library --> BookService
     Library --> BorrowService
     Library --> ReturnService
     Library --> ReservationService
     Library --> FineService
     Library --> MemberService
-    Branch "1" *-- "1" CatalogSearchService
-    Branch "1" o-- "0..*" Librarian
     ReservationQueue "1" --> "0..*" BookReservation
 ```
