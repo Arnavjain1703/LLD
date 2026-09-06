@@ -7,11 +7,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class BookItem {
 
     // AtomicInteger — lock-free thread-safe counter
-    // getAndIncrement() is a single atomic CPU instruction — no synchronized needed
     private static final AtomicInteger counter = new AtomicInteger(1000);
 
     private final String barcode;
-    private final Book book;      // back-reference to parent title
+    private final Book book;       // back-reference to parent title
     private BookItemStatus status;
 
     public BookItem(Book book) {
@@ -20,8 +19,7 @@ public class BookItem {
         this.status  = BookItemStatus.AVAILABLE;
     }
 
-    // all state transitions synchronized on `this`
-    // only one thread can transition status at a time — prevents illegal state combinations
+    // all state transitions synchronized — only one thread transitions at a time
 
     public synchronized void checkout() {
         if (status != BookItemStatus.AVAILABLE) {
@@ -72,9 +70,23 @@ public class BookItem {
         return status == BookItemStatus.AVAILABLE;
     }
 
-    public String getBarcode()               { return barcode; }
-    public Book getBook()                    { return book; }
+    public String getBarcode()                { return barcode; }
+    public Book getBook()                     { return book; }
     public synchronized BookItemStatus getStatus() { return status; }
+
+    // equality by barcode — barcode is the unique identity of a physical copy
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof BookItem)) return false;
+        BookItem other = (BookItem) o;
+        return this.barcode.equals(other.barcode);
+    }
+
+    @Override
+    public int hashCode() {
+        return barcode.hashCode();
+    }
 
     @Override
     public String toString() {

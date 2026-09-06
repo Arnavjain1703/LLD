@@ -1,7 +1,12 @@
 package library.search;
 
 import library.model.Book;
-import library.search.handler.*;
+import library.repository.BookItemRepository;
+import library.search.handler.SearchHandler;
+import library.search.handler.IsbnSearchHandler;
+import library.search.handler.TitleSearchHandler;
+import library.search.handler.AuthorSearchHandler;
+import library.search.handler.GenreSearchHandler;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -9,21 +14,24 @@ import java.util.stream.Collectors;
 
 public class CatalogSearchService {
 
-    private final Map<String, List<Book>> byTitle  = new ConcurrentHashMap<>();
-    private final Map<String, List<Book>> byAuthor = new ConcurrentHashMap<>();
-    private final Map<String, Book>       byISBN   = new ConcurrentHashMap<>();
-    private final Map<String, List<Book>> byGenre  = new ConcurrentHashMap<>();
+    // byISBN is the master index — single source of truth for all books
+    // used for O(1) direct ISBN lookup and as the base collection for filtered search
+    private final Map<String, Book> byISBN = new ConcurrentHashMap<>();
 
-    // ordered list of handlers — each handles one search field
-    // adding a new field = new handler class + register here, nothing else changes
+    // handlers — each knows how to check if a Book matches one criteria field
+    // adding a new search field = new handler class only, nothing else changes
     private final List<SearchHandler> handlers;
 
-    public CatalogSearchService() {
+    // injected to check physical availability without coupling Book to copies
+    private final BookItemRepository bookItemRepository;
+
+    public CatalogSearchService(BookItemRepository bookItemRepository) {
+        this.bookItemRepository = bookItemRepository;
         handlers = List.of(
-            new IsbnSearchHandler(byISBN),
-            new TitleSearchHandler(byTitle),
-            new AuthorSearchHandler(byAuthor),
-            new GenreSearchHandler(byGenre)
+            new IsbnSearchHandler(),
+            new TitleSearchHandler(),
+            new AuthorSearchHandler(),
+            new GenreSearchHandler()
         );
     }
 
@@ -31,12 +39,12 @@ public class CatalogSearchService {
 
     public List<Book> search(SearchCriteria criteria) {
 
-        // find all handlers that can handle the given criteria fields
+        // collect only handlers relevant to the provided criteria
         List<SearchHandler> matched = handlers.stream()
             .filter(h -> h.canHandle(criteria))
             .collect(Collectors.toList());
 
-        // no criteria provided — return all books (full scan)
+        // no criteria provided — return all books
         if (matched.isEmpty()) {
             return paginate(
                 new ArrayList<>(byISBN.values()),
@@ -44,23 +52,15 @@ public class CatalogSearchService {
             );
         }
 
-        // run all matched handlers independently
-        List<List<Book>> allResults = matched.stream()
-            .map(h -> h.handle(criteria))
+        // single filter pass — book must satisfy ALL active criteria (intersection)
+        List<Book> results = byISBN.values().stream()
+            .filter(book -> matched.stream().allMatch(h -> h.matches(book, criteria)))
             .collect(Collectors.toList());
 
-        // intersect — book must satisfy ALL provided criteria
-        Set<Book> intersection = new HashSet<>(allResults.get(0));
-        for (int i = 1; i < allResults.size(); i++) {
-            intersection.retainAll(new HashSet<>(allResults.get(i)));
-        }
-
-        List<Book> results = new ArrayList<>(intersection);
-
-        // availability post-filter — applied after intersection
+        // availability post-filter — delegates to BookItemRepository, not Book
         if (criteria.isAvailableOnly()) {
             results = results.stream()
-                             .filter(Book::hasAvailableCopy)
+                             .filter(book -> bookItemRepository.hasAvailableCopy(book.getIsbn()))
                              .collect(Collectors.toList());
         }
 
@@ -69,43 +69,14 @@ public class CatalogSearchService {
 
     // ── Index management ──────────────────────────────────────────────────────
 
-    // synchronized — compound write across 4 maps must be atomic
+    // synchronized — write to index must be atomic
     public synchronized void indexBook(Book book) {
         byISBN.put(book.getIsbn(), book);
-
-        byTitle.computeIfAbsent(
-            book.getTitle().toLowerCase(), k -> new ArrayList<>()
-        ).add(book);
-
-        byGenre.computeIfAbsent(
-            book.getGenre().toLowerCase(), k -> new ArrayList<>()
-        ).add(book);
-
-        book.getAuthors().forEach(author ->
-            byAuthor.computeIfAbsent(
-                author.toLowerCase(), k -> new ArrayList<>()
-            ).add(book)
-        );
     }
 
-    // synchronized — compound delete across 4 maps must be atomic
+    // synchronized — remove from index must be atomic
     public synchronized void removeBook(String isbn) {
-        Book book = byISBN.remove(isbn);
-        if (book == null) return;
-
-        byTitle.getOrDefault(
-            book.getTitle().toLowerCase(), Collections.emptyList()
-        ).remove(book);
-
-        byGenre.getOrDefault(
-            book.getGenre().toLowerCase(), Collections.emptyList()
-        ).remove(book);
-
-        book.getAuthors().forEach(author ->
-            byAuthor.getOrDefault(
-                author.toLowerCase(), Collections.emptyList()
-            ).remove(book)
-        );
+        byISBN.remove(isbn);
     }
 
     // ── Pagination ────────────────────────────────────────────────────────────

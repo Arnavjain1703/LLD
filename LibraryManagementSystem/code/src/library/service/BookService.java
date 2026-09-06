@@ -3,6 +3,7 @@ package library.service;
 import library.exception.BookNotFoundException;
 import library.model.Book;
 import library.model.BookItem;
+import library.repository.BookItemRepository;
 import library.repository.BookRepository;
 import library.search.CatalogSearchService;
 import library.search.SearchCriteria;
@@ -12,36 +13,32 @@ import java.util.List;
 public class BookService {
 
     private final BookRepository bookRepository;
+    private final BookItemRepository bookItemRepository;
     private final CatalogSearchService catalogSearchService;
 
     public BookService(BookRepository bookRepository,
+                       BookItemRepository bookItemRepository,
                        CatalogSearchService catalogSearchService) {
         this.bookRepository       = bookRepository;
+        this.bookItemRepository   = bookItemRepository;
         this.catalogSearchService = catalogSearchService;
     }
 
+    // ── Book operations ───────────────────────────────────────────────────────
+
     // synchronized — save to repo + index to catalog must appear atomic
-    // a search between the two calls would miss the newly added book
     public synchronized Book addBook(Book book) {
         Book saved = bookRepository.save(book);
         catalogSearchService.indexBook(saved);
         return saved;
     }
 
-    public BookItem addBookItem(String isbn, BookItem bookItem) {
-        // repo validates isbn exists — throws BookNotFoundException if missing
-        return bookRepository.saveBookItem(isbn, bookItem);
-    }
-
-    // synchronized — delete from repo + remove from index must appear atomic
-    // a search between the two calls would find a book that no longer exists in repo
+    // synchronized — 3 operations must appear atomic:
+    // 1. delete all copies  2. delete book  3. remove from search index
     public synchronized void deleteBook(String isbn) {
+        bookItemRepository.deleteAllCopies(isbn); // copies first — no orphaned items
         bookRepository.delete(isbn);
         catalogSearchService.removeBook(isbn);
-    }
-
-    public void deleteBookItem(String barcode) {
-        bookRepository.deleteBookItem(barcode);
     }
 
     public Book getBook(String isbn) {
@@ -57,5 +54,28 @@ public class BookService {
 
     public List<Book> search(SearchCriteria criteria) {
         return catalogSearchService.search(criteria);
+    }
+
+    // ── BookItem operations ───────────────────────────────────────────────────
+
+    public BookItem addBookItem(String isbn, BookItem bookItem) {
+        // validate book exists before adding a copy
+        bookRepository.findByIsbn(isbn)
+            .orElseThrow(() -> new BookNotFoundException(
+                "Cannot add copy — Book not found with ISBN: " + isbn
+            ));
+        return bookItemRepository.save(isbn, bookItem);
+    }
+
+    public void deleteBookItem(String barcode) {
+        bookItemRepository.delete(barcode);
+    }
+
+    public List<BookItem> getAllCopies(String isbn) {
+        return bookItemRepository.findAllCopies(isbn);
+    }
+
+    public boolean hasAvailableCopy(String isbn) {
+        return bookItemRepository.hasAvailableCopy(isbn);
     }
 }
