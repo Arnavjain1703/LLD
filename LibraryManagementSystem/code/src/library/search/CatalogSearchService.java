@@ -1,6 +1,7 @@
 package library.search;
 
 import library.model.Book;
+import library.search.handler.*;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -8,16 +9,67 @@ import java.util.stream.Collectors;
 
 public class CatalogSearchService {
 
-    // ConcurrentHashMap — thread-safe reads without locking
-    // individual get() calls are safe across threads
-    // compound writes (indexBook/removeBook) are synchronized separately
     private final Map<String, List<Book>> byTitle  = new ConcurrentHashMap<>();
     private final Map<String, List<Book>> byAuthor = new ConcurrentHashMap<>();
     private final Map<String, Book>       byISBN   = new ConcurrentHashMap<>();
     private final Map<String, List<Book>> byGenre  = new ConcurrentHashMap<>();
 
+    // ordered list of handlers — each handles one search field
+    // adding a new field = new handler class + register here, nothing else changes
+    private final List<SearchHandler> handlers;
+
+    public CatalogSearchService() {
+        handlers = List.of(
+            new IsbnSearchHandler(byISBN),
+            new TitleSearchHandler(byTitle),
+            new AuthorSearchHandler(byAuthor),
+            new GenreSearchHandler(byGenre)
+        );
+    }
+
+    // ── Search ────────────────────────────────────────────────────────────────
+
+    public List<Book> search(SearchCriteria criteria) {
+
+        // find all handlers that can handle the given criteria fields
+        List<SearchHandler> matched = handlers.stream()
+            .filter(h -> h.canHandle(criteria))
+            .collect(Collectors.toList());
+
+        // no criteria provided — return all books (full scan)
+        if (matched.isEmpty()) {
+            return paginate(
+                new ArrayList<>(byISBN.values()),
+                criteria.getPage(), criteria.getPageSize()
+            );
+        }
+
+        // run all matched handlers independently
+        List<List<Book>> allResults = matched.stream()
+            .map(h -> h.handle(criteria))
+            .collect(Collectors.toList());
+
+        // intersect — book must satisfy ALL provided criteria
+        Set<Book> intersection = new HashSet<>(allResults.get(0));
+        for (int i = 1; i < allResults.size(); i++) {
+            intersection.retainAll(new HashSet<>(allResults.get(i)));
+        }
+
+        List<Book> results = new ArrayList<>(intersection);
+
+        // availability post-filter — applied after intersection
+        if (criteria.isAvailableOnly()) {
+            results = results.stream()
+                             .filter(Book::hasAvailableCopy)
+                             .collect(Collectors.toList());
+        }
+
+        return paginate(results, criteria.getPage(), criteria.getPageSize());
+    }
+
+    // ── Index management ──────────────────────────────────────────────────────
+
     // synchronized — compound write across 4 maps must be atomic
-    // partial index = stale or inconsistent search results
     public synchronized void indexBook(Book book) {
         byISBN.put(book.getIsbn(), book);
 
@@ -56,49 +108,10 @@ public class CatalogSearchService {
         );
     }
 
-    // read-only — no lock needed
-    // ConcurrentHashMap.get() is safe without synchronization
-    public List<Book> search(SearchCriteria criteria) {
-        List<Book> results;
-
-        if (criteria.getIsbn() != null) {
-            // O(1) — most specific, check ISBN first
-            Book book = byISBN.get(criteria.getIsbn());
-            results = book != null ? List.of(book) : Collections.emptyList();
-
-        } else if (criteria.getTitle() != null) {
-            // O(1) map lookup + O(n) copy for safe iteration
-            results = new ArrayList<>(
-                byTitle.getOrDefault(criteria.getTitle().toLowerCase(), Collections.emptyList())
-            );
-
-        } else if (criteria.getAuthor() != null) {
-            results = new ArrayList<>(
-                byAuthor.getOrDefault(criteria.getAuthor().toLowerCase(), Collections.emptyList())
-            );
-
-        } else if (criteria.getGenre() != null) {
-            results = new ArrayList<>(
-                byGenre.getOrDefault(criteria.getGenre().toLowerCase(), Collections.emptyList())
-            );
-
-        } else {
-            // no filter — full scan O(n)
-            results = new ArrayList<>(byISBN.values());
-        }
-
-        // secondary filter — availability
-        if (criteria.isAvailableOnly()) {
-            results = results.stream()
-                             .filter(Book::hasAvailableCopy)
-                             .collect(Collectors.toList());
-        }
-
-        return paginate(results, criteria.getPage(), criteria.getPageSize());
-    }
+    // ── Pagination ────────────────────────────────────────────────────────────
 
     private List<Book> paginate(List<Book> results, int page, int pageSize) {
-        if (pageSize <= 0) return results; // no pagination requested
+        if (pageSize <= 0) return results;
         int from = Math.min(page * pageSize, results.size());
         int to   = Math.min(from + pageSize, results.size());
         return results.subList(from, to);
