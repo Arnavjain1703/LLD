@@ -23,8 +23,6 @@ classDiagram
         +String publisher
         +String language
         +String edition
-        +List~BookItem~ copies
-        +getAvailableCopy() BookItem
     }
 
     class BookItem {
@@ -35,64 +33,12 @@ classDiagram
         +BookItem(Book book)
         +synchronized checkout()
         +synchronized markReturned()
-        +markReserved()
-        +markLost()
-        +markDamaged()
-        +isAvailable() boolean
-    }
-
-    class BookRepository {
-        <<interface>>
-        +save(Book) Book
-        +findByIsbn(String) Book
-        +findAll() List~Book~
-        +delete(String isbn)
-        +saveBookItem(BookItem) BookItem
-        +findBookItemByBarcode(String) BookItem
-        +deleteBookItem(String barcode)
-    }
-
-    class InMemoryBookRepository {
-        -Map~String, Book~ bookStore
-        -Map~String, BookItem~ bookItemStore
-        +save(Book) Book
-        +findByIsbn(String) Book
-        +findAll() List~Book~
-        +delete(String isbn)
-        +saveBookItem(BookItem) BookItem
-        +findBookItemByBarcode(String) BookItem
-        +deleteBookItem(String barcode)
-    }
-
-    class SearchCriteria {
-        +String title
-        +String author
-        +String isbn
-        +String genre
-        +boolean availableOnly
-        +int page
-        +int pageSize
-    }
-
-    class CatalogSearchService {
-        -Map~String, List~Book~~ byTitle
-        -Map~String, Book~ byISBN
-        -Map~String, List~Book~~ byGenre
-        +search(SearchCriteria) List~Book~
-        +indexBook(Book)
-        +removeBook(String isbn)
-    }
-
-    class BookService {
-        -BookRepository bookRepository
-        -CatalogSearchService catalogSearchService
-        +addBook(Book) Book
-        +addBookItem(String isbn, BookItem) BookItem
-        +deleteBook(String isbn)
-        +deleteBookItem(String barcode)
-        +getBook(String isbn) Book
-        +getAllBooks() List~Book~
-        +search(SearchCriteria) List~Book~
+        +synchronized markReserved()
+        +synchronized markLost()
+        +synchronized markDamaged()
+        +synchronized isAvailable() boolean
+        +equals(Object) boolean
+        +hashCode() int
     }
 
     class BookNotAvailableException {
@@ -103,17 +49,134 @@ classDiagram
         +InvalidBookStateException(String message)
     }
 
+    class BookNotFoundException {
+        +BookNotFoundException(String message)
+    }
+
+    class BookRepository {
+        <<interface>>
+        +save(Book) Book
+        +findByIsbn(String) Optional~Book~
+        +findAll() List~Book~
+        +delete(String isbn)
+    }
+
+    class InMemoryBookRepository {
+        -Map~String, Book~ bookStore
+        +save(Book) Book
+        +findByIsbn(String) Optional~Book~
+        +findAll() List~Book~
+        +delete(String isbn)
+    }
+
+    class BookItemRepository {
+        <<interface>>
+        +save(String isbn, BookItem) BookItem
+        +findByBarcode(String) Optional~BookItem~
+        +delete(String barcode)
+        +deleteAllCopies(String isbn)
+        +findAvailableCopy(String isbn) Optional~BookItem~
+        +hasAvailableCopy(String isbn) boolean
+        +findAllCopies(String isbn) List~BookItem~
+    }
+
+    class InMemoryBookItemRepository {
+        -Map~String, BookItem~ bookItemStore
+        -Map~String, List~String~~ isbnToCopies
+        +synchronized save(String isbn, BookItem) BookItem
+        +findByBarcode(String) Optional~BookItem~
+        +synchronized delete(String barcode)
+        +synchronized deleteAllCopies(String isbn)
+        +findAvailableCopy(String isbn) Optional~BookItem~
+        +hasAvailableCopy(String isbn) boolean
+        +findAllCopies(String isbn) List~BookItem~
+    }
+
+    class SearchCriteria {
+        +String title
+        +String author
+        +String isbn
+        +String genre
+        +boolean availableOnly
+        +int page
+        +int pageSize
+        +builder() Builder
+    }
+
+    class SearchHandler {
+        <<interface>>
+        +canHandle(SearchCriteria) boolean
+        +handle(SearchCriteria) List~Book~
+    }
+
+    class IsbnSearchHandler {
+        -Map~String, Book~ byISBN
+        +canHandle(SearchCriteria) boolean
+        +handle(SearchCriteria) List~Book~
+    }
+
+    class TitleSearchHandler {
+        -Map~String, List~Book~~ byTitle
+        +canHandle(SearchCriteria) boolean
+        +handle(SearchCriteria) List~Book~
+    }
+
+    class AuthorSearchHandler {
+        -Map~String, List~Book~~ byAuthor
+        +canHandle(SearchCriteria) boolean
+        +handle(SearchCriteria) List~Book~
+    }
+
+    class GenreSearchHandler {
+        -Map~String, List~Book~~ byGenre
+        +canHandle(SearchCriteria) boolean
+        +handle(SearchCriteria) List~Book~
+    }
+
+    class CatalogSearchService {
+        -Map~String, List~Book~~ byTitle
+        -Map~String, List~Book~~ byAuthor
+        -Map~String, Book~ byISBN
+        -Map~String, List~Book~~ byGenre
+        -List~SearchHandler~ handlers
+        +search(SearchCriteria) List~Book~
+        +synchronized indexBook(Book)
+        +synchronized removeBook(String isbn)
+    }
+
+    class BookService {
+        -BookRepository bookRepository
+        -BookItemRepository bookItemRepository
+        -CatalogSearchService catalogSearchService
+        +synchronized addBook(Book) Book
+        +synchronized deleteBook(String isbn)
+        +getBook(String isbn) Book
+        +getAllBooks() List~Book~
+        +search(SearchCriteria) List~Book~
+        +addBookItem(String isbn, BookItem) BookItem
+        +deleteBookItem(String barcode)
+        +getAllCopies(String isbn) List~BookItem~
+        +hasAvailableCopy(String isbn) boolean
+    }
+
     BookRepository <|.. InMemoryBookRepository
-    Book "1" *-- "1..*" BookItem : has copies
-    BookItem --> BookItemStatus
+    BookItemRepository <|.. InMemoryBookItemRepository
     BookItem --> Book : back-reference
+    BookItem --> BookItemStatus
     BookItem ..> BookNotAvailableException : throws
     BookItem ..> InvalidBookStateException : throws
     InMemoryBookRepository --> Book : stores
-    InMemoryBookRepository --> BookItem : stores
-    BookService --> BookRepository : persists via
-    BookService --> CatalogSearchService : keeps in sync
-    BookService --> SearchCriteria
+    InMemoryBookItemRepository --> BookItem : bookItemStore
+    InMemoryBookItemRepository --> BookItem : isbnToCopies lookup
+    SearchHandler <|.. IsbnSearchHandler
+    SearchHandler <|.. TitleSearchHandler
+    SearchHandler <|.. AuthorSearchHandler
+    SearchHandler <|.. GenreSearchHandler
+    CatalogSearchService "1" o-- "1..*" SearchHandler : delegates to
+    BookService --> BookRepository
+    BookService --> BookItemRepository
+    BookService --> CatalogSearchService
+    BookService ..> BookNotFoundException : throws
 ```
 
 ---
@@ -162,16 +225,16 @@ classDiagram
     class MemberRepository {
         <<interface>>
         +save(Member) Member
-        +findById(String) Member
-        +findByEmail(String) Member
+        +findById(String) Optional~Member~
+        +findByEmail(String) Optional~Member~
         +delete(String memberId)
     }
 
     class InMemoryMemberRepository {
         -Map~String, Member~ memberStore
         +save(Member) Member
-        +findById(String) Member
-        +findByEmail(String) Member
+        +findById(String) Optional~Member~
+        +findByEmail(String) Optional~Member~
         +delete(String memberId)
     }
 
@@ -239,12 +302,12 @@ classDiagram
     }
 
     class BorrowService {
-        -BookRepository bookRepository
+        -BookItemRepository bookItemRepository
         -BookLendingRepository lendingRepository
         -NotificationDispatcher notificationDispatcher
         +borrowBook(Member, String isbn) BookLending
         -validateMember(Member)
-        -selectAvailableCopy(Book) BookItem
+        -selectAvailableCopy(String isbn) BookItem
     }
 
     BookLendingRepository <|.. InMemoryBookLendingRepository
@@ -252,8 +315,8 @@ classDiagram
     BookLending "1" --> "1" Member
     BookLending --> LendingAuditLog : creates
     InMemoryBookLendingRepository --> BookLending : stores
+    BorrowService --> BookItemRepository
     BorrowService --> BookLendingRepository
-    BorrowService --> BookRepository
     BorrowService --> NotificationDispatcher
     Member "1" o-- "0..*" BookLending : active lendings
 ```
@@ -306,7 +369,7 @@ classDiagram
         -NotificationDispatcher notificationDispatcher
         +returnBook(Member, String barcode) Fine
         -calculateFine(BookLending) Fine
-        -triggerReservationNotification(Book)
+        -triggerReservationNotification(String isbn)
     }
 
     FineStrategy <|.. RegularFineStrategy
@@ -364,7 +427,7 @@ classDiagram
         +reserve(Member, String isbn) BookReservation
         +cancel(String reservationId)
         +expireStale()
-        +notifyNext(Book)
+        +notifyNext(String isbn)
     }
 
     BookReservation "1" --> "1" Book
@@ -412,8 +475,6 @@ classDiagram
     InMemoryFineRepository --> Fine : stores
     FineService --> FineRepository
     FineService --> FineStrategyFactory
-    FineService --> Fine
-    FineService --> Librarian
 ```
 
 ---
@@ -531,20 +592,23 @@ classDiagram
         +String title
         +List~String~ authors
         +String genre
-        +List~BookItem~ copies
-        +getAvailableCopy() BookItem
+        +String publisher
+        +String language
+        +String edition
     }
     class BookItem {
         -static AtomicInteger counter
         +String barcode
-        +BookItemStatus status
         +Book book
+        +BookItemStatus status
         +synchronized checkout()
         +synchronized markReturned()
-        +markReserved()
-        +markLost()
-        +markDamaged()
-        +isAvailable() boolean
+        +synchronized markReserved()
+        +synchronized markLost()
+        +synchronized markDamaged()
+        +synchronized isAvailable() boolean
+        +equals(Object) boolean
+        +hashCode() int
     }
     class BookNotAvailableException {
         +BookNotAvailableException(String message)
@@ -552,30 +616,43 @@ classDiagram
     class InvalidBookStateException {
         +InvalidBookStateException(String message)
     }
+    class BookNotFoundException {
+        +BookNotFoundException(String message)
+    }
     class BookRepository {
         <<interface>>
         +save(Book) Book
-        +findByIsbn(String) Book
+        +findByIsbn(String) Optional~Book~
         +findAll() List~Book~
         +delete(String isbn)
-        +saveBookItem(BookItem) BookItem
-        +findBookItemByBarcode(String) BookItem
-        +deleteBookItem(String barcode)
     }
     class InMemoryBookRepository {
         -Map~String, Book~ bookStore
-        -Map~String, BookItem~ bookItemStore
         +save(Book) Book
-        +findByIsbn(String) Book
+        +findByIsbn(String) Optional~Book~
         +findAll() List~Book~
         +delete(String isbn)
     }
-    class CatalogSearchService {
-        -Map~String, List~Book~~ byTitle
-        -Map~String, Book~ byISBN
-        +search(SearchCriteria) List~Book~
-        +indexBook(Book)
-        +removeBook(String isbn)
+    class BookItemRepository {
+        <<interface>>
+        +save(String isbn, BookItem) BookItem
+        +findByBarcode(String) Optional~BookItem~
+        +delete(String barcode)
+        +deleteAllCopies(String isbn)
+        +findAvailableCopy(String isbn) Optional~BookItem~
+        +hasAvailableCopy(String isbn) boolean
+        +findAllCopies(String isbn) List~BookItem~
+    }
+    class InMemoryBookItemRepository {
+        -Map~String, BookItem~ bookItemStore
+        -Map~String, List~String~~ isbnToCopies
+        +synchronized save(String isbn, BookItem) BookItem
+        +findByBarcode(String) Optional~BookItem~
+        +synchronized delete(String barcode)
+        +synchronized deleteAllCopies(String isbn)
+        +findAvailableCopy(String isbn) Optional~BookItem~
+        +hasAvailableCopy(String isbn) boolean
+        +findAllCopies(String isbn) List~BookItem~
     }
     class SearchCriteria {
         +String title
@@ -586,16 +663,54 @@ classDiagram
         +int page
         +int pageSize
     }
+    class SearchHandler {
+        <<interface>>
+        +canHandle(SearchCriteria) boolean
+        +handle(SearchCriteria) List~Book~
+    }
+    class IsbnSearchHandler {
+        -Map~String, Book~ byISBN
+        +canHandle(SearchCriteria) boolean
+        +handle(SearchCriteria) List~Book~
+    }
+    class TitleSearchHandler {
+        -Map~String, List~Book~~ byTitle
+        +canHandle(SearchCriteria) boolean
+        +handle(SearchCriteria) List~Book~
+    }
+    class AuthorSearchHandler {
+        -Map~String, List~Book~~ byAuthor
+        +canHandle(SearchCriteria) boolean
+        +handle(SearchCriteria) List~Book~
+    }
+    class GenreSearchHandler {
+        -Map~String, List~Book~~ byGenre
+        +canHandle(SearchCriteria) boolean
+        +handle(SearchCriteria) List~Book~
+    }
+    class CatalogSearchService {
+        -Map~String, List~Book~~ byTitle
+        -Map~String, List~Book~~ byAuthor
+        -Map~String, Book~ byISBN
+        -Map~String, List~Book~~ byGenre
+        -List~SearchHandler~ handlers
+        +search(SearchCriteria) List~Book~
+        +synchronized indexBook(Book)
+        +synchronized removeBook(String isbn)
+    }
     class BookService {
         -BookRepository bookRepository
+        -BookItemRepository bookItemRepository
         -CatalogSearchService catalogSearchService
-        +addBook(Book) Book
-        +addBookItem(String isbn, BookItem) BookItem
-        +deleteBook(String isbn)
-        +deleteBookItem(String barcode)
+        +synchronized addBook(Book) Book
+        +synchronized deleteBook(String isbn)
         +getBook(String isbn) Book
         +getAllBooks() List~Book~
         +search(SearchCriteria) List~Book~
+        +addBookItem(String isbn, BookItem) BookItem
+        +deleteBookItem(String barcode)
+        +getAllCopies(String isbn) List~BookItem~
+        +hasAvailableCopy(String isbn) boolean
     }
     class Person {
         <<abstract>>
@@ -618,14 +733,14 @@ classDiagram
     class MemberRepository {
         <<interface>>
         +save(Member) Member
-        +findById(String) Member
-        +findByEmail(String) Member
+        +findById(String) Optional~Member~
+        +findByEmail(String) Optional~Member~
     }
     class InMemoryMemberRepository {
         -Map~String, Member~ memberStore
         +save(Member) Member
-        +findById(String) Member
-        +findByEmail(String) Member
+        +findById(String) Optional~Member~
+        +findByEmail(String) Optional~Member~
     }
     class MemberService {
         -MemberRepository memberRepository
@@ -663,7 +778,7 @@ classDiagram
     class BorrowService {
         +borrowBook(Member, String isbn) BookLending
         -validateMember(Member)
-        -selectAvailableCopy(Book) BookItem
+        -selectAvailableCopy(String isbn) BookItem
     }
     class Fine {
         +String fineId
@@ -708,7 +823,7 @@ classDiagram
     }
     class ReturnService {
         +returnBook(Member, String barcode) Fine
-        -triggerReservationNotification(Book)
+        -triggerReservationNotification(String isbn)
     }
     class BookReservation {
         +String reservationId
@@ -728,7 +843,7 @@ classDiagram
         +reserve(Member, String isbn) BookReservation
         +cancel(String reservationId)
         +expireStale()
-        +notifyNext(Book)
+        +notifyNext(String isbn)
     }
     class NotificationService {
         <<interface>>
@@ -750,14 +865,24 @@ classDiagram
         +static getInstance() Library
     }
 
-    Book "1" *-- "1..*" BookItem
+    BookItem --> Book : back-reference
     BookItem --> BookItemStatus
-    BookItem --> Book
     BookItem ..> BookNotAvailableException : throws
     BookItem ..> InvalidBookStateException : throws
     BookRepository <|.. InMemoryBookRepository
+    BookItemRepository <|.. InMemoryBookItemRepository
+    InMemoryBookRepository --> Book : stores
+    InMemoryBookItemRepository --> BookItem : bookItemStore
+    InMemoryBookItemRepository --> BookItem : isbnToCopies
+    SearchHandler <|.. IsbnSearchHandler
+    SearchHandler <|.. TitleSearchHandler
+    SearchHandler <|.. AuthorSearchHandler
+    SearchHandler <|.. GenreSearchHandler
+    CatalogSearchService "1" o-- "1..*" SearchHandler : delegates to
     BookService --> BookRepository
+    BookService --> BookItemRepository
     BookService --> CatalogSearchService
+    BookService ..> BookNotFoundException : throws
     Person <|-- Member
     Person <|-- Librarian
     Member --> MemberStatus
@@ -769,7 +894,7 @@ classDiagram
     BookLending "1" --> "1" Member
     BookLending --> LendingAuditLog : creates
     Member "1" o-- "0..*" BookLending
-    BorrowService --> BookRepository
+    BorrowService --> BookItemRepository
     BorrowService --> BookLendingRepository
     BorrowService --> NotificationDispatcher
     FineStrategy <|.. RegularFineStrategy
