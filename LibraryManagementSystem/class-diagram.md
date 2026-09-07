@@ -139,7 +139,7 @@ classDiagram
         -Map~String, Book~ byISBN
         -Map~String, List~Book~~ byGenre
         -List~SearchHandler~ handlers
-        +search(SearchCriteria) List~Book~
+        +search(SearchCriteria) List~Book~ : intersection across all criteria
         +synchronized indexBook(Book)
         +synchronized removeBook(String isbn)
     }
@@ -196,6 +196,7 @@ classDiagram
         <<enumeration>>
         REGULAR
         PREMIUM
+        LIBRARIAN
     }
 
     class Person {
@@ -204,6 +205,7 @@ classDiagram
         +String name
         +String email
         +String phone
+        %% id is initialised to email — email is the unique identity
     }
 
     class Member {
@@ -211,46 +213,34 @@ classDiagram
         +MemberTier tier
         +int MAX_BORROW_LIMIT = 5
         +canBorrow() boolean
-        +hasPendingFine() boolean
-    }
-
-    class Librarian {
-        +String employeeId
-        +suspendMember(String memberId)
-        +reactivateMember(String memberId)
-        +blacklistMember(String memberId)
-        +waiveFine(Fine)
+        %% fine check is FineService's responsibility, not Member's
     }
 
     class MemberRepository {
         <<interface>>
         +save(Member) Member
-        +findById(String) Optional~Member~
-        +findByEmail(String) Optional~Member~
-        +delete(String memberId)
+        +findById(String email) Optional~Member~
+        +delete(String email)
     }
 
     class InMemoryMemberRepository {
-        -Map~String, Member~ memberStore
+        -Map~String email, Member~ memberStore
         +save(Member) Member
-        +findById(String) Optional~Member~
-        +findByEmail(String) Optional~Member~
-        +delete(String memberId)
+        +findById(String email) Optional~Member~
+        +delete(String email)
     }
 
     class MemberService {
         -MemberRepository memberRepository
         +register(Member) Member
-        +suspend(String memberId)
-        +reactivate(String memberId)
-        +blacklist(String memberId)
-        +getMember(String memberId) Member
-        +getBorrowHistory(String memberId) List~BookLending~
-        +getFineHistory(String memberId) List~Fine~
+        +suspend(String email)
+        +reactivate(String email)
+        +blacklist(String email)
+        +upgradeTier(String email, MemberTier)
+        +getMember(String email) Member
     }
 
     Person <|-- Member
-    Person <|-- Librarian
     Member --> MemberStatus
     Member --> MemberTier
     MemberRepository <|.. InMemoryMemberRepository
@@ -467,7 +457,7 @@ classDiagram
         -FineStrategyFactory fineStrategyFactory
         +calculateFine(BookLending) Fine
         +payFine(String fineId)
-        +waiveFine(String fineId, Librarian)
+        +waiveFine(String fineId, String performedByMemberId)
         +getOutstandingFines(String memberId) List~Fine~
     }
 
@@ -573,6 +563,7 @@ classDiagram
         <<enumeration>>
         REGULAR
         PREMIUM
+        LIBRARIAN
     }
     class ReservationStatus {
         <<enumeration>>
@@ -724,17 +715,13 @@ classDiagram
         +MemberTier tier
         +int MAX_BORROW_LIMIT = 5
         +canBorrow() boolean
-        +hasPendingFine() boolean
-    }
-    class Librarian {
-        +String employeeId
-        +waiveFine(Fine)
+        %% fine check is FineService's responsibility, not Member's
     }
     class MemberRepository {
         <<interface>>
         +save(Member) Member
-        +findById(String) Optional~Member~
-        +findByEmail(String) Optional~Member~
+        +findById(String email) Optional~Member~
+        +delete(String email)
     }
     class InMemoryMemberRepository {
         -Map~String, Member~ memberStore
@@ -819,7 +806,7 @@ classDiagram
     class FineService {
         +calculateFine(BookLending) Fine
         +payFine(String fineId)
-        +waiveFine(String fineId, Librarian)
+        +waiveFine(String fineId, String performedByMemberId)
     }
     class ReturnService {
         +returnBook(Member, String barcode) Fine
@@ -884,7 +871,6 @@ classDiagram
     BookService --> CatalogSearchService
     BookService ..> BookNotFoundException : throws
     Person <|-- Member
-    Person <|-- Librarian
     Member --> MemberStatus
     Member --> MemberTier
     MemberRepository <|.. InMemoryMemberRepository
