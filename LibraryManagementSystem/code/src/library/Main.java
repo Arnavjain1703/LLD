@@ -15,6 +15,11 @@ import library.search.CatalogSearchService;
 import library.search.SearchCriteria;
 import library.service.BookService;
 import library.service.MemberService;
+import library.model.BookLending;
+import library.notification.NotificationDispatcher;
+import library.repository.BookLendingRepository;
+import library.repository.InMemoryBookLendingRepository;
+import library.service.BorrowService;
 
 import java.util.List;
 
@@ -131,5 +136,57 @@ public class Main {
         // ── Deregister ──────────────────────────────────────────────────────
         memberService.deregister("bob@lib.com");
         System.out.println("\nMembers after deregistering Bob: " + memberService.getAllMembers());
+        // ═══════════════════════════════════════════════════════════════════
+        // Step 3 — BorrowService
+        // ═══════════════════════════════════════════════════════════════════
+
+        BookLendingRepository lendingRepository   = new InMemoryBookLendingRepository();
+        NotificationDispatcher notificationDispatcher = new NotificationDispatcher();
+        BorrowService borrowService = new BorrowService(bookItemRepository, lendingRepository, notificationDispatcher);
+
+        // re-register alice (deregistered above in Step 2 demo? no — only Bob was deregistered)
+        Member borrower = memberService.getMember("alice@lib.com");
+
+        // ── Happy path: borrow a book ────────────────────────────────────────
+        System.out.println("\n--- BorrowService ---");
+        BookLending lending1 = borrowService.borrowBook(borrower, ddia.getIsbn());
+        System.out.println("Lending created: " + lending1);
+        System.out.println("DDIA copy is now: " + lending1.getBookItem().getStatus());
+
+        // ── Same member borrows a second book ───────────────────────────────
+        BookLending lending2 = borrowService.borrowBook(borrower, clean.getIsbn());
+        System.out.println("Second lending: " + lending2);
+
+        // ── Active borrows for alice ─────────────────────────────────────────
+        System.out.println("Active borrows for alice: "
+                + lendingRepository.findActiveByMember("alice@lib.com").size());
+
+        // ── Suspended member cannot borrow ──────────────────────────────────
+        memberService.suspend("carol@lib.com");
+        try {
+            borrowService.borrowBook(memberService.getMember("carol@lib.com"), ddia.getIsbn());
+        } catch (Exception e) {
+            System.out.println("Suspended member blocked: " + e.getMessage());
+        }
+        memberService.reactivate("carol@lib.com");
+
+        // ── Borrow limit: register 3 more members and push alice to limit ───
+        // Alice already has 2 borrows; borrow 3 more to hit limit of 5
+        for (int i = 3; i <= 5; i++) {
+            // need extra copies of DDIA
+            bookService.addBookItem(ddia.getIsbn(), new BookItem(ddia));
+        }
+        borrowService.borrowBook(borrower, ddia.getIsbn());
+        borrowService.borrowBook(borrower, ddia.getIsbn());
+        borrowService.borrowBook(borrower, ddia.getIsbn());
+        System.out.println("Alice active borrows (should be 5): "
+                + lendingRepository.findActiveByMember("alice@lib.com").size());
+        try {
+            bookService.addBookItem(ddia.getIsbn(), new BookItem(ddia));
+            borrowService.borrowBook(borrower, ddia.getIsbn());
+        } catch (Exception e) {
+            System.out.println("Borrow limit enforced: " + e.getMessage());
+        }
+
     }
 }
