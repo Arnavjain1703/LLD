@@ -20,6 +20,11 @@ import library.notification.NotificationDispatcher;
 import library.repository.BookLendingRepository;
 import library.repository.InMemoryBookLendingRepository;
 import library.service.BorrowService;
+import library.fine.FineStrategyFactory;
+import library.model.Fine;
+import library.repository.FineRepository;
+import library.repository.InMemoryFineRepository;
+import library.service.FineService;
 
 import java.util.List;
 
@@ -187,6 +192,77 @@ public class Main {
         } catch (Exception e) {
             System.out.println("Borrow limit enforced: " + e.getMessage());
         }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // Step 6 — FineService
+        // ═══════════════════════════════════════════════════════════════════
+
+        FineRepository fineRepository = new InMemoryFineRepository();
+        FineService fineService = new FineService(fineRepository, new FineStrategyFactory());
+
+        // Alice has 5 active borrows (from Step 3 demo above).
+        // Simulate overdue by checking projected fine for each active lending.
+        System.out.println("\n--- FineService ---");
+
+        java.util.List<BookLending> aliceActive =
+                lendingRepository.findActiveByMember("alice@lib.com");
+
+        System.out.println("Alice active borrows: " + aliceActive.size());
+
+        // Projected fine per lending (based on today — books borrowed just now, so 0 overdue days)
+        for (BookLending l : aliceActive) {
+            double projected = fineService.getProjectedFine(l);
+            System.out.println("  Lending " + l.getLendingId().substring(0, 8)
+                    + " overdue days=" + l.overdueDays()
+                    + " projected fine=$" + String.format("%.2f", projected));
+        }
+
+        // Total projected fine across all active lendings
+        double totalActive = fineService.getTotalActiveFine(aliceActive);
+        System.out.println("Total projected fine for alice (all active): $"
+                + String.format("%.2f", totalActive));
+
+        // Simulate a returned overdue book: manually set returnDate in the past
+        // to trigger an overdue fine calculation
+        BookLending overdueLending = aliceActive.get(0);
+        overdueLending.setReturnDate(overdueLending.getDueDate().minusDays(0)); // returned on due date — no fine
+        Fine f1 = fineService.calculateFine(overdueLending);
+        System.out.println("Fine on-time return: " + f1);  // null
+
+        // Force overdue: returnDate = dueDate + 5 days
+        BookLending overdueLending2 = aliceActive.get(1);
+        overdueLending2.setReturnDate(overdueLending2.getDueDate().plusDays(5));
+        Fine f2 = fineService.calculateFine(overdueLending2);
+        System.out.println("Fine after 5 overdue days (REGULAR $1/day): " + f2);
+
+        // Carol is LIBRARIAN — waived strategy, $0
+        BookLending carolLending = borrowService.borrowBook(
+                memberService.getMember("carol@lib.com"), clean.getIsbn());
+        carolLending.setReturnDate(carolLending.getDueDate().plusDays(3));
+        Fine carolFine = fineService.calculateFine(carolLending);
+        System.out.println("Fine for Librarian Carol after 3 overdue days: " + carolFine); // null
+
+        // Pay a fine
+        if (f2 != null) {
+            System.out.println("Outstanding before pay: $"
+                    + String.format("%.2f", fineService.getTotalOutstanding("alice@lib.com")));
+            fineService.payFine(f2.getFineId());
+            System.out.println("Outstanding after pay:  $"
+                    + String.format("%.2f", fineService.getTotalOutstanding("alice@lib.com")));
+        }
+
+        // Waive a fine (Carol is librarian — she can waive)
+        // Create another overdue fine for alice then waive it
+        BookLending overdueLending3 = aliceActive.get(2);
+        overdueLending3.setReturnDate(overdueLending3.getDueDate().plusDays(2));
+        Fine f3 = fineService.calculateFine(overdueLending3);
+        if (f3 != null) {
+            fineService.waiveFine(f3.getFineId(), "carol@lib.com");
+            System.out.println("Fine waived: " + f3);
+        }
+
+        // Full fine history for alice
+        System.out.println("Fine history for alice: " + fineService.getFineHistory("alice@lib.com"));
 
     }
 }
