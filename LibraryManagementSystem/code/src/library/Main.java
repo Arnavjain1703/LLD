@@ -3,28 +3,18 @@ package library;
 import library.exception.DuplicateMemberException;
 import library.model.Book;
 import library.model.BookItem;
+import library.model.BookLending;
+import library.model.BookReservation;
+import library.model.Fine;
 import library.model.Member;
 import library.model.MemberTier;
-import library.repository.BookItemRepository;
-import library.repository.BookRepository;
-import library.repository.InMemoryBookItemRepository;
-import library.repository.InMemoryBookRepository;
-import library.repository.InMemoryMemberRepository;
-import library.repository.MemberRepository;
-import library.search.CatalogSearchService;
 import library.search.SearchCriteria;
 import library.service.BookService;
-import library.service.MemberService;
-import library.model.BookLending;
-import library.notification.NotificationDispatcher;
-import library.repository.BookLendingRepository;
-import library.repository.InMemoryBookLendingRepository;
 import library.service.BorrowService;
-import library.fine.FineStrategyFactory;
-import library.model.Fine;
-import library.repository.FineRepository;
-import library.repository.InMemoryFineRepository;
 import library.service.FineService;
+import library.service.MemberService;
+import library.service.ReservationService;
+import library.service.ReturnService;
 
 import java.util.List;
 
@@ -32,237 +22,161 @@ public class Main {
 
     public static void main(String[] args) {
 
+        // ── single entry point — all services come from here ─────────────────
+        Library lib = Library.getInstance();
+
+        BookService        bookService        = lib.getBookService();
+        MemberService      memberService      = lib.getMemberService();
+        BorrowService      borrowService      = lib.getBorrowService();
+        ReturnService      returnService      = lib.getReturnService();
+        ReservationService reservationService = lib.getReservationService();
+        FineService        fineService        = lib.getFineService();
+
         // ═══════════════════════════════════════════════════════════════════
         // Step 1 — BookService
         // ═══════════════════════════════════════════════════════════════════
 
-        BookRepository bookRepository         = new InMemoryBookRepository();
-        BookItemRepository bookItemRepository = new InMemoryBookItemRepository();
-        CatalogSearchService catalogSearch    = new CatalogSearchService(bookItemRepository);
-        BookService bookService               = new BookService(bookRepository, bookItemRepository, catalogSearch);
+        System.out.println("\n--- BookService ---");
 
-        // ── Add books ───────────────────────────────────────────────────────
         Book ddia = bookService.addBook(new Book(
-            "978-1449373320", "Designing Data-Intensive Applications",
-            List.of("Martin Kleppmann"), "Technology", "O'Reilly", "English", "1st"));
+                "978-1449373320", "Designing Data-Intensive Applications",
+                List.of("Martin Kleppmann"), "Technology", "O'Reilly", "English", "1st"));
 
         Book clean = bookService.addBook(new Book(
-            "978-0132350884", "Clean Code",
-            List.of("Robert C. Martin"), "Technology", "Prentice Hall", "English", "1st"));
+                "978-0132350884", "Clean Code",
+                List.of("Robert C. Martin"), "Technology", "Prentice Hall", "English", "1st"));
 
         Book hobbit = bookService.addBook(new Book(
-            "978-0547928227", "The Hobbit",
-            List.of("J.R.R. Tolkien"), "Fantasy", "Houghton Mifflin", "English", "1st"));
+                "978-0547928227", "The Hobbit",
+                List.of("J.R.R. Tolkien"), "Fantasy", "Houghton Mifflin", "English", "1st"));
+
+        // add copies
+        bookService.addBookItem(ddia.getIsbn(), new BookItem(ddia));
+        bookService.addBookItem(ddia.getIsbn(), new BookItem(ddia));
+        bookService.addBookItem(clean.getIsbn(), new BookItem(clean));
 
         System.out.println("All books: " + bookService.getAllBooks());
 
-        // ── Add physical copies ─────────────────────────────────────────────
-        BookItem ddiaCopy1 = bookService.addBookItem(ddia.getIsbn(), new BookItem(ddia));
-        bookService.addBookItem(ddia.getIsbn(), new BookItem(ddia));
-        BookItem cleanCopy1 = bookService.addBookItem(clean.getIsbn(), new BookItem(clean));
+        // search by genre
+        System.out.println("Technology books: " + bookService.search(
+                SearchCriteria.builder().genre("Technology").build()));
 
-        System.out.println("\nCopies of DDIA: " + bookService.getAllCopies(ddia.getIsbn()));
-
-        // ── Checkout / return flow ──────────────────────────────────────────
-        System.out.println("\nDDIA has available copy? " + bookService.hasAvailableCopy(ddia.getIsbn()));
-        ddiaCopy1.checkout();
-        System.out.println("After checking out one copy: " + ddiaCopy1);
-        System.out.println("DDIA still has available copy? " + bookService.hasAvailableCopy(ddia.getIsbn()));
-        ddiaCopy1.markReturned();
-        System.out.println("After return: " + ddiaCopy1);
-
-        // ── Search: by genre ────────────────────────────────────────────────
-        List<Book> tech = bookService.search(SearchCriteria.builder()
-            .genre("Technology")
-            .build());
-        System.out.println("\nTechnology books: " + tech);
-
-        // ── Search: by title (partial) ──────────────────────────────────────
-        List<Book> byTitle = bookService.search(SearchCriteria.builder()
-            .title("clean")
-            .build());
-        System.out.println("Title contains 'clean': " + byTitle);
-
-        // ── Search: available copies only ───────────────────────────────────
-        cleanCopy1.checkout();
-        List<Book> available = bookService.search(SearchCriteria.builder()
-            .genre("Technology")
-            .availableOnly(true)
-            .build());
-        System.out.println("Available Technology books (Clean Code checked out): " + available);
-        cleanCopy1.markReturned();
-
-        // ── Delete a book (cascades to copies + search index) ───────────────
+        // delete
         bookService.deleteBook(hobbit.getIsbn());
-        System.out.println("\nAfter deleting The Hobbit: " + bookService.getAllBooks());
+        System.out.println("After deleting Hobbit: " + bookService.getAllBooks());
 
         // ═══════════════════════════════════════════════════════════════════
         // Step 2 — MemberService
         // ═══════════════════════════════════════════════════════════════════
 
-        MemberRepository memberRepository = new InMemoryMemberRepository();
-        MemberService memberService       = new MemberService(memberRepository);
+        System.out.println("\n--- MemberService ---");
 
-        // ── Register members ────────────────────────────────────────────────
         Member alice = memberService.register(new Member("Alice", "alice@lib.com", "9001"));
-        Member bob   = memberService.register(new Member("Bob",   "bob@lib.com",   "9002"));
         Member carol = memberService.register(new Member("Carol", "carol@lib.com", "9003"));
+        Member dave  = memberService.register(new Member("Dave",  "dave@lib.com",  "9004"));
 
-        System.out.println("\nAll members: " + memberService.getAllMembers());
-
-        // ── Duplicate email rejected ─────────────────────────────────────────
+        // duplicate email blocked
         try {
             memberService.register(new Member("Alice2", "alice@lib.com", "9999"));
         } catch (DuplicateMemberException e) {
-            System.out.println("\nDuplicate email blocked: " + e.getMessage());
+            System.out.println("Duplicate blocked: " + e.getMessage());
         }
 
-        // ── canBorrow reflects status ───────────────────────────────────────
-        System.out.println("\nAlice canBorrow (ACTIVE)? " + alice.canBorrow());
+        // suspend / reactivate
         memberService.suspend("alice@lib.com");
-        System.out.println("Alice canBorrow (SUSPENDED)? " + alice.canBorrow());
+        System.out.println("Alice canBorrow (suspended): " + alice.canBorrow());
         memberService.reactivate("alice@lib.com");
-        System.out.println("Alice canBorrow (reactivated)? " + alice.canBorrow());
+        System.out.println("Alice canBorrow (reactivated): " + alice.canBorrow());
 
-        // ── Blacklist is terminal ───────────────────────────────────────────
-        memberService.blacklist("bob@lib.com");
-        System.out.println("\nBob status after blacklist: " + bob.getStatus());
-        try {
-            memberService.reactivate("bob@lib.com");
-        } catch (IllegalStateException e) {
-            System.out.println("Reactivate blacklisted member blocked: " + e.getMessage());
-        }
-
-        // ── Tier upgrade ────────────────────────────────────────────────────
+        // upgrade Carol to LIBRARIAN
         memberService.upgradeTier("carol@lib.com", MemberTier.LIBRARIAN);
-        System.out.println("\nCarol tier after upgrade: " + carol.getTier());
-        System.out.println("Carol isLibrarian? " + carol.isLibrarian());
+        System.out.println("Carol isLibrarian: " + carol.isLibrarian());
 
-        // ── Deregister ──────────────────────────────────────────────────────
-        memberService.deregister("bob@lib.com");
-        System.out.println("\nMembers after deregistering Bob: " + memberService.getAllMembers());
         // ═══════════════════════════════════════════════════════════════════
         // Step 3 — BorrowService
         // ═══════════════════════════════════════════════════════════════════
 
-        BookLendingRepository lendingRepository   = new InMemoryBookLendingRepository();
-        NotificationDispatcher notificationDispatcher = new NotificationDispatcher();
-        BorrowService borrowService = new BorrowService(bookItemRepository, lendingRepository, notificationDispatcher);
-
-        // re-register alice (deregistered above in Step 2 demo? no — only Bob was deregistered)
-        Member borrower = memberService.getMember("alice@lib.com");
-
-        // ── Happy path: borrow a book ────────────────────────────────────────
         System.out.println("\n--- BorrowService ---");
-        BookLending lending1 = borrowService.borrowBook(borrower, ddia.getIsbn());
-        System.out.println("Lending created: " + lending1);
-        System.out.println("DDIA copy is now: " + lending1.getBookItem().getStatus());
 
-        // ── Same member borrows a second book ───────────────────────────────
-        BookLending lending2 = borrowService.borrowBook(borrower, clean.getIsbn());
-        System.out.println("Second lending: " + lending2);
+        BookLending lending1 = borrowService.borrowBook(alice, ddia.getIsbn());
+        System.out.println("Alice borrowed: " + lending1);
+        System.out.println("Copy status: " + lending1.getBookItem().getStatus());
 
-        // ── Active borrows for alice ─────────────────────────────────────────
-        System.out.println("Active borrows for alice: "
-                + lendingRepository.findActiveByMember("alice@lib.com").size());
+        BookLending lending2 = borrowService.borrowBook(alice, clean.getIsbn());
+        System.out.println("Alice borrowed second book: " + lending2);
 
-        // ── Suspended member cannot borrow ──────────────────────────────────
-        memberService.suspend("carol@lib.com");
+        // suspended member cannot borrow
+        memberService.suspend("dave@lib.com");
         try {
-            borrowService.borrowBook(memberService.getMember("carol@lib.com"), ddia.getIsbn());
+            borrowService.borrowBook(dave, ddia.getIsbn());
         } catch (Exception e) {
             System.out.println("Suspended member blocked: " + e.getMessage());
         }
-        memberService.reactivate("carol@lib.com");
+        memberService.reactivate("dave@lib.com");
 
-        // ── Borrow limit: register 3 more members and push alice to limit ───
-        // Alice already has 2 borrows; borrow 3 more to hit limit of 5
-        for (int i = 3; i <= 5; i++) {
-            // need extra copies of DDIA
-            bookService.addBookItem(ddia.getIsbn(), new BookItem(ddia));
-        }
-        borrowService.borrowBook(borrower, ddia.getIsbn());
-        borrowService.borrowBook(borrower, ddia.getIsbn());
-        borrowService.borrowBook(borrower, ddia.getIsbn());
-        System.out.println("Alice active borrows (should be 5): "
-                + lendingRepository.findActiveByMember("alice@lib.com").size());
-        try {
-            bookService.addBookItem(ddia.getIsbn(), new BookItem(ddia));
-            borrowService.borrowBook(borrower, ddia.getIsbn());
-        } catch (Exception e) {
-            System.out.println("Borrow limit enforced: " + e.getMessage());
-        }
+        // ═══════════════════════════════════════════════════════════════════
+        // Step 5 — ReservationService (before Return, to set up queue)
+        // ═══════════════════════════════════════════════════════════════════
+
+        System.out.println("\n--- ReservationService ---");
+
+        // DDIA has 2 copies — both borrowed by alice + dave
+        bookService.addBookItem(ddia.getIsbn(), new BookItem(ddia));
+        BookLending daveLending = borrowService.borrowBook(dave, ddia.getIsbn());
+
+        // Carol reserves DDIA — all copies out
+        BookReservation carolRes = reservationService.reserve(carol, ddia.getIsbn());
+        System.out.println("Carol reservation: " + carolRes);
+        System.out.println("Queue has waiting: " + reservationService.hasWaiting(ddia.getIsbn()));
+
+        // ═══════════════════════════════════════════════════════════════════
+        // Step 4 — ReturnService
+        // ═══════════════════════════════════════════════════════════════════
+
+        System.out.println("\n--- ReturnService ---");
+
+        // Alice returns Clean Code on time — no fine
+        Fine f1 = returnService.returnBook(alice, lending2.getBookItem().getBarcode());
+        System.out.println("On-time return fine: " + f1);
+        System.out.println("Clean Code copy status: " + lending2.getBookItem().getStatus());
+
+        // Alice returns DDIA — Carol is waiting, copy goes RESERVED
+        Fine f2 = returnService.returnBook(alice, lending1.getBookItem().getBarcode());
+        System.out.println("DDIA copy status after return (Carol waiting): "
+                + lending1.getBookItem().getStatus());
+        System.out.println("Carol reservation status: " + carolRes.getStatus());
 
         // ═══════════════════════════════════════════════════════════════════
         // Step 6 — FineService
         // ═══════════════════════════════════════════════════════════════════
 
-        FineRepository fineRepository = new InMemoryFineRepository();
-        FineService fineService = new FineService(fineRepository, new FineStrategyFactory());
-
-        // Alice has 5 active borrows (from Step 3 demo above).
-        // Simulate overdue by checking projected fine for each active lending.
         System.out.println("\n--- FineService ---");
 
-        java.util.List<BookLending> aliceActive =
-                lendingRepository.findActiveByMember("alice@lib.com");
+        // Dave still has DDIA — check projected fine (0 since just borrowed)
+        List<BookLending> daveActive = lib.getBorrowService() == borrowService
+                ? List.of(daveLending) : List.of();
+        System.out.println("Dave projected fine (just borrowed): $"
+                + String.format("%.2f", fineService.getProjectedFine(daveLending)));
 
-        System.out.println("Alice active borrows: " + aliceActive.size());
+        // Simulate Dave returning overdue: set returnDate = dueDate + 7 days
+        daveLending.setReturnDate(daveLending.getDueDate().plusDays(7));
+        Fine daveFine = fineService.payFineForLending(daveLending);
+        System.out.println("Dave fine after 7 overdue days ($1/day): " + daveFine);
 
-        // Projected fine per lending (based on today — books borrowed just now, so 0 overdue days)
-        for (BookLending l : aliceActive) {
-            double projected = fineService.getProjectedFine(l);
-            System.out.println("  Lending " + l.getLendingId().substring(0, 8)
-                    + " overdue days=" + l.overdueDays()
-                    + " projected fine=$" + String.format("%.2f", projected));
-        }
+        // Carol is LIBRARIAN — waived strategy
+        BookLending carolLending = borrowService.borrowBook(carol, clean.getIsbn());
+        carolLending.setReturnDate(carolLending.getDueDate().plusDays(5));
+        Fine carolFine = fineService.payFineForLending(carolLending);
+        System.out.println("Carol (LIBRARIAN) fine: " + carolFine);  // null
 
-        // Total projected fine across all active lendings
-        double totalActive = fineService.getTotalActiveFine(aliceActive);
-        System.out.println("Total projected fine for alice (all active): $"
-                + String.format("%.2f", totalActive));
+        // Payment history
+        System.out.println("Dave fine history: " + fineService.getFineHistory("dave@lib.com"));
 
-        // Simulate a returned overdue book: manually set returnDate in the past
-        // to trigger an overdue fine calculation
-        BookLending overdueLending = aliceActive.get(0);
-        overdueLending.setReturnDate(overdueLending.getDueDate().minusDays(0)); // returned on due date — no fine
-        Fine f1 = fineService.calculateFine(overdueLending);
-        System.out.println("Fine on-time return: " + f1);  // null
-
-        // Force overdue: returnDate = dueDate + 5 days
-        BookLending overdueLending2 = aliceActive.get(1);
-        overdueLending2.setReturnDate(overdueLending2.getDueDate().plusDays(5));
-        Fine f2 = fineService.calculateFine(overdueLending2);
-        System.out.println("Fine after 5 overdue days (REGULAR $1/day): " + f2);
-
-        // Carol is LIBRARIAN — waived strategy, $0
-        BookLending carolLending = borrowService.borrowBook(
-                memberService.getMember("carol@lib.com"), clean.getIsbn());
-        carolLending.setReturnDate(carolLending.getDueDate().plusDays(3));
-        Fine carolFine = fineService.calculateFine(carolLending);
-        System.out.println("Fine for Librarian Carol after 3 overdue days: " + carolFine); // null
-
-        // Pay a fine
-        if (f2 != null) {
-            System.out.println("Outstanding before pay: $"
-                    + String.format("%.2f", fineService.getTotalOutstanding("alice@lib.com")));
-            fineService.payFine(f2.getFineId());
-            System.out.println("Outstanding after pay:  $"
-                    + String.format("%.2f", fineService.getTotalOutstanding("alice@lib.com")));
-        }
-
-        // Waive a fine (Carol is librarian — she can waive)
-        // Create another overdue fine for alice then waive it
-        BookLending overdueLending3 = aliceActive.get(2);
-        overdueLending3.setReturnDate(overdueLending3.getDueDate().plusDays(2));
-        Fine f3 = fineService.calculateFine(overdueLending3);
-        if (f3 != null) {
-            fineService.waiveFine(f3.getFineId(), "carol@lib.com");
-            System.out.println("Fine waived: " + f3);
-        }
-
-        // Full fine history for alice
-        System.out.println("Fine history for alice: " + fineService.getFineHistory("alice@lib.com"));
-
+        // Waive a fine via librarian
+        bookService.addBookItem(ddia.getIsbn(), new BookItem(ddia));
+        BookLending aliceLending2 = borrowService.borrowBook(alice, ddia.getIsbn());
+        aliceLending2.setReturnDate(aliceLending2.getDueDate().plusDays(3));
+        Fine aliceFine = fineService.waiveFineForLending(aliceLending2, "carol@lib.com");
+        System.out.println("Alice fine waived by Carol: " + aliceFine);
     }
 }
