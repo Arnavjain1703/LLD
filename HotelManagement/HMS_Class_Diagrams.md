@@ -2,11 +2,11 @@
 
 ---
 
-## Component 1: Hotel & Room Management
+## Component 1a: Hotel Management
 
-> Responsibility: Lifecycle operations only — register, add, update, delete.
-> Actor: Hotel Admin, Chain Admin.
-> Rule: If it creates or mutates a resource, it belongs here.
+> Responsibility: Hotel lifecycle only — register, deregister, fetch.
+> Actor: Chain Admin.
+> Rule: Does NOT touch rooms (that is RoomService). Does NOT query availability (that is SearchService).
 
 ```mermaid
 classDiagram
@@ -30,6 +30,42 @@ classDiagram
         +getCountry() String
     }
 
+    class HotelRepository {
+        -store: Map~String, Hotel~
+        +save(Hotel) void
+        +findById(String) Optional~Hotel~
+        +findByCity(String) List~Hotel~
+        +findByMinStarRating(int) List~Hotel~
+        +exists(String) boolean
+        +delete(String) void
+        +findAll() List~Hotel~
+    }
+
+    class HotelService {
+        -hotelRepository: HotelRepository
+        -roomService: RoomService
+        +registerHotel(Hotel) void
+        +deregisterHotel(String) void
+        +getHotel(String) Hotel
+        +getAllHotels() List~Hotel~
+    }
+
+    Hotel            -->  Address
+    HotelRepository  o--  Hotel
+    HotelService     -->  HotelRepository
+    HotelService     -->  RoomService
+```
+
+---
+
+## Component 1b: Room Management
+
+> Responsibility: Room lifecycle only — add, remove, maintenance.
+> Actor: Hotel Admin.
+> Rule: Does NOT register hotels (that is HotelService). Does NOT answer availability (that is SearchService).
+
+```mermaid
+classDiagram
     class Room {
         -roomId: String
         -hotelId: String
@@ -62,16 +98,6 @@ classDiagram
         UNDER_MAINTENANCE
     }
 
-    class HotelRepository {
-        -store: Map~String, Hotel~
-        +save(Hotel) void
-        +findById(String) Optional~Hotel~
-        +findByCity(String) List~Hotel~
-        +findByMinStarRating(int) List~Hotel~
-        +exists(String) boolean
-        +findAll() List~Hotel~
-    }
-
     class RoomRepository {
         -store: Map~String, Room~
         +save(Room) void
@@ -79,38 +105,35 @@ classDiagram
         +findByHotelId(String) List~Room~
         +findAvailableByHotelIdAndType(String, RoomType) List~Room~
         +findByStatus(RoomStatus) List~Room~
+        +delete(String) void
+        +findAll() List~Room~
     }
 
-    class HotelService {
-        -hotelRepository: HotelRepository
+    class RoomService {
         -roomRepository: RoomRepository
-        +registerHotel(Hotel) void
-        +deregisterHotel(String) void
-        +getHotel(String) Hotel
+        -hotelRepository: HotelRepository
         +addRoom(Room) void
         +removeRoom(String) void
+        +removeAllRoomsForHotel(String) void
+        +getRoom(String) Room
+        +getRoomsByHotel(String) List~Room~
         +markUnderMaintenance(String) void
         +markAvailable(String) void
     }
 
-    %% NOTE: getHotelsByCity and getAvailableRooms are NOT here.
-    %% They are discovery operations — they live in SearchService.
-
-    Hotel       --> Address
-    Room        --> RoomType
-    Room        --> RoomStatus
-    HotelService --> HotelRepository
-    HotelService --> RoomRepository
-    HotelRepository o-- Hotel
-    RoomRepository  o-- Room
+    Room            -->  RoomType
+    Room            -->  RoomStatus
+    RoomRepository  o--  Room
+    RoomService     -->  RoomRepository
+    RoomService     -->  HotelRepository
 ```
 
 ---
 
 ## Component 2: Guest Management
 
-> Responsibility: Guest lifecycle — register, fetch, update booking history.
-> Actor: Guest (self-registration), Front Desk (walk-in registration).
+> Responsibility: Guest lifecycle — register, fetch, booking history.
+> Actor: Guest (self-registration), Front Desk (walk-in).
 
 ```mermaid
 classDiagram
@@ -142,8 +165,8 @@ classDiagram
         +getBookingHistory(String) List~String~
     }
 
-    GuestService    --> GuestRepository
-    GuestRepository o-- Guest
+    GuestRepository  o--  Guest
+    GuestService     -->  GuestRepository
 ```
 
 ---
@@ -152,10 +175,9 @@ classDiagram
 
 > Responsibility: All discovery and availability queries.
 > Actor: Guest.
-> Rule: If the operation answers "what exists and is available?", it belongs here.
+> Rule: If the operation answers "what exists and is available?" it belongs here.
 >
-> getHotelsByCity()    → moved HERE from HotelService (it is a query, not management)
-> getAvailableRooms()  → moved HERE from HotelService (it is a query, not management)
+> getHotelsByCity / getHotelsByMinStars moved here from HotelService — they are queries, not mutations.
 
 ```mermaid
 classDiagram
@@ -173,7 +195,7 @@ classDiagram
     }
 
     class SearchCriteriaBuilder {
-        +Builder(String city, LocalDate, LocalDate)
+        +Builder(String, LocalDate, LocalDate)
         +roomType(RoomType) Builder
         +minCapacity(int) Builder
         +build() SearchCriteria
@@ -191,23 +213,19 @@ classDiagram
         -hotelRepository: HotelRepository
         -roomRepository: RoomRepository
         -bookingRepository: BookingRepository
+        +getHotelsByCity(String) List~Hotel~
+        +getHotelsByMinStars(int) List~Hotel~
         +searchHotels(SearchCriteria) List~SearchResult~
         +searchRoomsInHotel(String, SearchCriteria) List~Room~
         +isRoomAvailable(String, LocalDate, LocalDate) boolean
-        +getHotelsByCity(String) List~Hotel~
-        +getHotelsByMinStars(int) List~Hotel~
     }
 
-    %% searchHotels    = city + dates + type + capacity (full availability check)
-    %% getHotelsByCity = simple city filter, no date check (browse mode)
-    %% isRoomAvailable = used internally by BookingService before confirming
-
-    SearchCriteriaBuilder ..> SearchCriteria : creates
-    SearchResult --> Hotel
-    SearchResult o-- Room
-    SearchService --> HotelRepository
-    SearchService --> RoomRepository
-    SearchService --> BookingRepository
+    SearchCriteriaBuilder  ..>  SearchCriteria : creates
+    SearchResult           -->  Hotel
+    SearchResult           o--  Room
+    SearchService          -->  HotelRepository
+    SearchService          -->  RoomRepository
+    SearchService          -->  BookingRepository
 ```
 
 ---
@@ -266,12 +284,12 @@ classDiagram
         +cancelBooking(String) Booking
     }
 
-    Booking       --> BookingStatus
-    BookingRepository  o-- Booking
-    BookingService --> BookingRepository
-    BookingService --> SearchService
-    BookingService --> PaymentService
-    BookingService --> NotificationService
+    Booking           -->  BookingStatus
+    BookingRepository o--  Booking
+    BookingService    -->  BookingRepository
+    BookingService    -->  SearchService
+    BookingService    -->  PaymentService
+    BookingService    -->  NotificationService
 ```
 
 ---
@@ -279,7 +297,7 @@ classDiagram
 ## Component 5: Payment
 
 > Responsibility: Charge, refund, invoice generation.
-> Pattern: Strategy — PaymentMethod is an interface; Cash/Card/UPI are strategies.
+> Pattern: Strategy — PaymentMethod is an interface; Cash/Card/UPI are interchangeable strategies.
 
 ```mermaid
 classDiagram
@@ -328,6 +346,7 @@ classDiagram
         +getPaymentId() String
         +getStatus() PaymentStatus
         +setStatus(PaymentStatus) void
+        +getAmount() BigDecimal
     }
 
     class Invoice {
@@ -349,13 +368,13 @@ classDiagram
         +generateInvoice(Booking, List~Room~) Invoice
     }
 
-    CashPayment ..|> PaymentMethod
-    CardPayment ..|> PaymentMethod
-    UPIPayment  ..|> PaymentMethod
-    Payment     --> PaymentStatus
-    Payment     --> PaymentMethod
-    PaymentService --> Payment
-    PaymentService ..> Invoice : creates
+    CashPayment    ..|>  PaymentMethod
+    CardPayment    ..|>  PaymentMethod
+    UPIPayment     ..|>  PaymentMethod
+    Payment        -->   PaymentStatus
+    Payment        -->   PaymentMethod
+    PaymentService -->   Payment
+    PaymentService ..>   Invoice : creates
 ```
 
 ---
@@ -363,8 +382,8 @@ classDiagram
 ## Component 6: Notification
 
 > Responsibility: Notify guests on booking events.
-> Pattern: Observer — NotificationService holds a list of channels;
->          new channels (push, WhatsApp) add without changing the service.
+> Pattern: Observer — NotificationService holds a list of channels.
+>          New channels (push, WhatsApp) plug in without changing the service.
 
 ```mermaid
 classDiagram
@@ -393,9 +412,9 @@ classDiagram
         +notifyCancellation(Booking, Guest) void
     }
 
-    EmailChannel ..|> NotificationChannel
-    SMSChannel   ..|> NotificationChannel
-    NotificationService o-- NotificationChannel
+    EmailChannel         ..|>  NotificationChannel
+    SMSChannel           ..|>  NotificationChannel
+    NotificationService  o--   NotificationChannel
 ```
 
 ---
@@ -404,12 +423,14 @@ classDiagram
 
 > Single entry point. Constructs and wires all repositories and services.
 > Private constructor prevents external instantiation.
+> Wiring order: RoomService → HotelService (cascade dependency).
 
 ```mermaid
 classDiagram
     class HotelManagementSystem {
         -instance: HotelManagementSystem
         -hotelService: HotelService
+        -roomService: RoomService
         -guestService: GuestService
         -searchService: SearchService
         -bookingService: BookingService
@@ -418,6 +439,7 @@ classDiagram
         -HotelManagementSystem()
         +getInstance() HotelManagementSystem
         +getHotelService() HotelService
+        +getRoomService() RoomService
         +getGuestService() GuestService
         +getSearchService() SearchService
         +getBookingService() BookingService
@@ -425,12 +447,13 @@ classDiagram
         +getNotificationService() NotificationService
     }
 
-    HotelManagementSystem --> HotelService
-    HotelManagementSystem --> GuestService
-    HotelManagementSystem --> SearchService
-    HotelManagementSystem --> BookingService
-    HotelManagementSystem --> PaymentService
-    HotelManagementSystem --> NotificationService
+    HotelManagementSystem  -->  HotelService
+    HotelManagementSystem  -->  RoomService
+    HotelManagementSystem  -->  GuestService
+    HotelManagementSystem  -->  SearchService
+    HotelManagementSystem  -->  BookingService
+    HotelManagementSystem  -->  PaymentService
+    HotelManagementSystem  -->  NotificationService
 ```
 
 ---
@@ -492,7 +515,6 @@ classDiagram
         -capacity: int
         -pricePerNight: BigDecimal
         +isAvailable() boolean
-        +overlaps via Booking
     }
     class Guest {
         -guestId: String
@@ -556,17 +578,25 @@ classDiagram
 
     %% ── Repositories ─────────────────────────────────────────────────────────
     class HotelRepository {
+        +save(Hotel) void
+        +findById(String) Optional~Hotel~
         +findByCity(String) List~Hotel~
         +findByMinStarRating(int) List~Hotel~
+        +exists(String) boolean
     }
     class RoomRepository {
+        +save(Room) void
+        +findById(String) Optional~Room~
         +findByHotelId(String) List~Room~
         +findAvailableByHotelIdAndType(String, RoomType) List~Room~
     }
     class GuestRepository {
+        +save(Guest) void
         +findById(String) Optional~Guest~
     }
     class BookingRepository {
+        +save(Booking) void
+        +findById(String) Optional~Booking~
         +findActiveByRoomId(String) List~Booking~
         +findByGuestId(String) List~Booking~
     }
@@ -574,18 +604,29 @@ classDiagram
     %% ── Services ─────────────────────────────────────────────────────────────
     class HotelService {
         +registerHotel(Hotel) void
+        +deregisterHotel(String) void
+        +getHotel(String) Hotel
+        +getAllHotels() List~Hotel~
+    }
+    class RoomService {
         +addRoom(Room) void
+        +removeRoom(String) void
+        +removeAllRoomsForHotel(String) void
+        +getRoom(String) Room
+        +getRoomsByHotel(String) List~Room~
         +markUnderMaintenance(String) void
         +markAvailable(String) void
     }
     class GuestService {
         +registerGuest(Guest) void
         +getGuest(String) Guest
+        +addBookingToGuest(String, String) void
     }
     class SearchService {
+        +getHotelsByCity(String) List~Hotel~
+        +getHotelsByMinStars(int) List~Hotel~
         +searchHotels(SearchCriteria) List~SearchResult~
         +searchRoomsInHotel(String, SearchCriteria) List~Room~
-        +getHotelsByCity(String) List~Hotel~
         +isRoomAvailable(String, LocalDate, LocalDate) boolean
     }
     class BookingService {
@@ -602,6 +643,7 @@ classDiagram
     }
     class NotificationService {
         +notifyBookingConfirmed(Booking, Guest) void
+        +notifyCheckIn(Booking, Guest) void
         +notifyCheckOut(Booking, Guest, Invoice) void
         +notifyCancellation(Booking, Guest) void
     }
@@ -612,46 +654,53 @@ classDiagram
         +getInstance() HotelManagementSystem
     }
 
-    %% ── Relationships ────────────────────────────────────────────────────────
-    Hotel       --> Address
-    Room        --> RoomType
-    Room        --> RoomStatus
-    Booking     --> BookingStatus
-    Payment     --> PaymentStatus
-    Payment     --> PaymentMethod
-    SearchResult --> Hotel
-    SearchResult o-- Room
+    %% ── Model Relationships ───────────────────────────────────────────────────
+    Hotel       -->  Address
+    Room        -->  RoomType
+    Room        -->  RoomStatus
+    Booking     -->  BookingStatus
+    Payment     -->  PaymentStatus
+    Payment     -->  PaymentMethod
+    SearchResult -->  Hotel
+    SearchResult o--  Room
 
-    CashPayment  ..|> PaymentMethod
-    CardPayment  ..|> PaymentMethod
-    UPIPayment   ..|> PaymentMethod
-    EmailChannel ..|> NotificationChannel
-    SMSChannel   ..|> NotificationChannel
+    %% ── Interface Implementations ─────────────────────────────────────────────
+    CashPayment  ..|>  PaymentMethod
+    CardPayment  ..|>  PaymentMethod
+    UPIPayment   ..|>  PaymentMethod
+    EmailChannel ..|>  NotificationChannel
+    SMSChannel   ..|>  NotificationChannel
 
-    HotelRepository   o-- Hotel
-    RoomRepository    o-- Room
-    GuestRepository   o-- Guest
-    BookingRepository o-- Booking
+    %% ── Repository Ownership ─────────────────────────────────────────────────
+    HotelRepository   o--  Hotel
+    RoomRepository    o--  Room
+    GuestRepository   o--  Guest
+    BookingRepository o--  Booking
 
-    HotelService   --> HotelRepository
-    HotelService   --> RoomRepository
-    GuestService   --> GuestRepository
-    SearchService  --> HotelRepository
-    SearchService  --> RoomRepository
-    SearchService  --> BookingRepository
-    BookingService --> BookingRepository
-    BookingService --> RoomRepository
-    BookingService --> GuestRepository
-    BookingService --> SearchService
-    BookingService --> PaymentService
-    BookingService --> NotificationService
-    PaymentService ..> Invoice : creates
+    %% ── Service → Repository Dependencies ────────────────────────────────────
+    HotelService   -->  HotelRepository
+    HotelService   -->  RoomService
+    RoomService    -->  RoomRepository
+    RoomService    -->  HotelRepository
+    GuestService   -->  GuestRepository
+    SearchService  -->  HotelRepository
+    SearchService  -->  RoomRepository
+    SearchService  -->  BookingRepository
+    BookingService -->  BookingRepository
+    BookingService -->  RoomRepository
+    BookingService -->  GuestRepository
+    BookingService -->  SearchService
+    BookingService -->  PaymentService
+    BookingService -->  NotificationService
+    PaymentService ..>  Invoice : creates
     NotificationService o-- NotificationChannel
 
-    HotelManagementSystem --> HotelService
-    HotelManagementSystem --> GuestService
-    HotelManagementSystem --> SearchService
-    HotelManagementSystem --> BookingService
-    HotelManagementSystem --> PaymentService
-    HotelManagementSystem --> NotificationService
+    %% ── Facade → Services ────────────────────────────────────────────────────
+    HotelManagementSystem  -->  HotelService
+    HotelManagementSystem  -->  RoomService
+    HotelManagementSystem  -->  GuestService
+    HotelManagementSystem  -->  SearchService
+    HotelManagementSystem  -->  BookingService
+    HotelManagementSystem  -->  PaymentService
+    HotelManagementSystem  -->  NotificationService
 ```
