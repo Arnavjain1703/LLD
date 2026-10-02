@@ -7,6 +7,9 @@
 > Responsibility: Hotel lifecycle only — register, deregister, fetch.
 > Actor: Chain Admin.
 > Rule: Does NOT touch rooms (that is RoomService). Does NOT query availability (that is SearchService).
+>
+> HotelRepository here shows only lifecycle methods.
+> findByCity / findByMinStarRating are query methods — they appear only in Component 3 (Search).
 
 ```mermaid
 classDiagram
@@ -34,8 +37,6 @@ classDiagram
         -store: Map~String, Hotel~
         +save(Hotel) void
         +findById(String) Optional~Hotel~
-        +findByCity(String) List~Hotel~
-        +findByMinStarRating(int) List~Hotel~
         +exists(String) boolean
         +delete(String) void
         +findAll() List~Hotel~
@@ -63,6 +64,9 @@ classDiagram
 > Responsibility: Room lifecycle only — add, remove, maintenance.
 > Actor: Hotel Admin.
 > Rule: Does NOT register hotels (that is HotelService). Does NOT answer availability (that is SearchService).
+>
+> RoomRepository here shows only lifecycle methods.
+> findAvailableByHotelIdAndType is a query method — it appears only in Component 3 (Search).
 
 ```mermaid
 classDiagram
@@ -103,7 +107,6 @@ classDiagram
         +save(Room) void
         +findById(String) Optional~Room~
         +findByHotelId(String) List~Room~
-        +findAvailableByHotelIdAndType(String, RoomType) List~Room~
         +findByStatus(RoomStatus) List~Room~
         +delete(String) void
         +findAll() List~Room~
@@ -177,10 +180,27 @@ classDiagram
 > Actor: Guest.
 > Rule: If the operation answers "what exists and is available?" it belongs here.
 >
-> getHotelsByCity / getHotelsByMinStars moved here from HotelService — they are queries, not mutations.
+> Query methods from repositories are shown here — in the component that actually uses them:
+>   HotelRepository.findByCity / findByMinStarRating   → used by SearchService only
+>   RoomRepository.findAvailableByHotelIdAndType        → used by SearchService only
+>   BookingRepository.findActiveByRoomId                → used by SearchService only
 
 ```mermaid
 classDiagram
+    class HotelRepository {
+        +findByCity(String) List~Hotel~
+        +findByMinStarRating(int) List~Hotel~
+    }
+
+    class RoomRepository {
+        +findByHotelId(String) List~Room~
+        +findAvailableByHotelIdAndType(String, RoomType) List~Room~
+    }
+
+    class BookingRepository {
+        +findActiveByRoomId(String) List~Booking~
+    }
+
     class SearchCriteria {
         -city: String
         -checkIn: LocalDate
@@ -265,7 +285,6 @@ classDiagram
         -store: Map~String, Booking~
         +save(Booking) void
         +findById(String) Optional~Booking~
-        +findActiveByRoomId(String) List~Booking~
         +findByGuestId(String) List~Booking~
         +findByHotelId(String) List~Booking~
     }
@@ -423,7 +442,7 @@ classDiagram
 
 > Single entry point. Constructs and wires all repositories and services.
 > Private constructor prevents external instantiation.
-> Wiring order: RoomService → HotelService (cascade dependency).
+> Wiring order: RoomService first, then HotelService (cascade dependency).
 
 ```mermaid
 classDiagram
@@ -576,18 +595,22 @@ classDiagram
     class EmailChannel { +send(String, String) void }
     class SMSChannel   { +send(String, String) void }
 
-    %% ── Repositories ─────────────────────────────────────────────────────────
+    %% ── Repositories (all methods for complete picture) ─────────────────────
     class HotelRepository {
         +save(Hotel) void
         +findById(String) Optional~Hotel~
+        +exists(String) boolean
+        +delete(String) void
+        +findAll() List~Hotel~
         +findByCity(String) List~Hotel~
         +findByMinStarRating(int) List~Hotel~
-        +exists(String) boolean
     }
     class RoomRepository {
         +save(Room) void
         +findById(String) Optional~Room~
         +findByHotelId(String) List~Room~
+        +findByStatus(RoomStatus) List~Room~
+        +delete(String) void
         +findAvailableByHotelIdAndType(String, RoomType) List~Room~
     }
     class GuestRepository {
@@ -654,17 +677,17 @@ classDiagram
         +getInstance() HotelManagementSystem
     }
 
-    %% ── Model Relationships ───────────────────────────────────────────────────
-    Hotel       -->  Address
-    Room        -->  RoomType
-    Room        -->  RoomStatus
-    Booking     -->  BookingStatus
-    Payment     -->  PaymentStatus
-    Payment     -->  PaymentMethod
+    %% ── Model Relationships ──────────────────────────────────────────────────
+    Hotel        -->  Address
+    Room         -->  RoomType
+    Room         -->  RoomStatus
+    Booking      -->  BookingStatus
+    Payment      -->  PaymentStatus
+    Payment      -->  PaymentMethod
     SearchResult -->  Hotel
     SearchResult o--  Room
 
-    %% ── Interface Implementations ─────────────────────────────────────────────
+    %% ── Interface Implementations ────────────────────────────────────────────
     CashPayment  ..|>  PaymentMethod
     CardPayment  ..|>  PaymentMethod
     UPIPayment   ..|>  PaymentMethod
@@ -677,7 +700,7 @@ classDiagram
     GuestRepository   o--  Guest
     BookingRepository o--  Booking
 
-    %% ── Service → Repository Dependencies ────────────────────────────────────
+    %% ── Service Dependencies ─────────────────────────────────────────────────
     HotelService   -->  HotelRepository
     HotelService   -->  RoomService
     RoomService    -->  RoomRepository
@@ -695,7 +718,7 @@ classDiagram
     PaymentService ..>  Invoice : creates
     NotificationService o-- NotificationChannel
 
-    %% ── Facade → Services ────────────────────────────────────────────────────
+    %% ── Facade ───────────────────────────────────────────────────────────────
     HotelManagementSystem  -->  HotelService
     HotelManagementSystem  -->  RoomService
     HotelManagementSystem  -->  GuestService
