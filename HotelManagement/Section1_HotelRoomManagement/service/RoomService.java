@@ -13,27 +13,27 @@ import java.util.List;
  * Responsibility: add, remove, fetch rooms; manage room status.
  * Actor: Hotel Admin.
  *
- * Dependencies: RoomRepository + HotelRepository (to validate hotel exists before adding).
- * Does NOT know about HotelService - zero coupling between the two services.
+ * addRoom(hotelId, room) - hotelId passed separately because Room no longer
+ * holds it. The repository owns the hotel-room association.
  */
 public class RoomService {
 
     private final RoomRepository  roomRepository;
-    private final HotelRepository hotelRepository; // validates hotel exists before addRoom
+    private final HotelRepository hotelRepository;
 
     public RoomService(RoomRepository roomRepository, HotelRepository hotelRepository) {
         this.roomRepository  = roomRepository;
         this.hotelRepository = hotelRepository;
     }
 
-    /** Add a room to an existing hotel. Guards that hotel exists first. */
-    public void addRoom(Room room) {
-        if (!hotelRepository.exists(room.getHotelId())) {
+    /** Add a room to a hotel. hotelId passed separately — Room does not hold it. */
+    public void addRoom(String hotelId, Room room) {
+        if (!hotelRepository.exists(hotelId)) {
             throw new IllegalArgumentException(
-                "Cannot add room - hotel not found: " + room.getHotelId());
+                "Cannot add room - hotel not found: " + hotelId);
         }
-        roomRepository.save(room);
-        System.out.println("Added to hotel " + room.getHotelId() + ": " + room);
+        roomRepository.save(hotelId, room);
+        System.out.println("Added to hotel " + hotelId + ": " + room);
     }
 
     public void removeRoom(String roomId) {
@@ -42,25 +42,21 @@ public class RoomService {
         System.out.println("Removed room: " + roomId);
     }
 
-    /** Remove all rooms for a hotel - called by facade before deregisterHotel. */
+    /** Remove all rooms for a hotel — O(1) via nested map. Called by facade on deregister. */
     public void removeAllRoomsForHotel(String hotelId) {
-        roomRepository.findByHotelId(hotelId)
-            .forEach(r -> roomRepository.delete(r.getRoomId()));
+        roomRepository.deleteAllByHotelId(hotelId);
         System.out.println("Removed all rooms for hotel: " + hotelId);
     }
 
-    /** Direct ID lookup - used internally by BookingService and SearchService. */
     public Room getRoom(String roomId) {
         return roomRepository.findById(roomId)
             .orElseThrow(() -> new IllegalArgumentException("Room not found: " + roomId));
     }
 
-    /** Admin view - ALL rooms in a hotel regardless of status. */
     public List<Room> getRoomsByHotel(String hotelId) {
         return roomRepository.findByHotelId(hotelId);
     }
 
-    /** Blocks a room from being booked. Cannot mark an OCCUPIED room. */
     public void markUnderMaintenance(String roomId) {
         Room room = getRoom(roomId);
         if (room.getStatus() == RoomStatus.OCCUPIED) {
@@ -71,7 +67,6 @@ public class RoomService {
         System.out.println("Room marked for maintenance: " + roomId);
     }
 
-    /** Restores a room to available after maintenance completes. */
     public void markAvailable(String roomId) {
         Room room = getRoom(roomId);
         if (room.getStatus() != RoomStatus.UNDER_MAINTENANCE) {

@@ -12,56 +12,91 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
- * Stores all Room objects across all hotels (global store).
- * Separate from HotelRepository - Hotel is thin, rooms are queried independently.
+ * RoomRepository owns the hotel-room association.
  *
- * Lifecycle methods  (used by RoomService):
- *   save, findById, findByHotelId, findByStatus, delete, findAll
+ * Primary store : Map<hotelId, Map<roomId, Room>>
+ *   - findByHotelId  = O(1) direct map lookup
+ *   - removeAllForHotel = O(1) single map.remove()
  *
- * Query methods (used by SearchService ONLY - not by RoomService):
- *   findAvailableByHotelIdAndType
+ * Secondary index: Map<roomId, hotelId>
+ *   - findById       = O(1) via index then primary lookup
+ *   - delete         = O(1) via index
+ *
+ * Why not Map<roomId, Room> with hotelId in Room?
+ *   The association belongs in the repository, not in the entity.
+ *   Room is a pure value object describing a physical unit.
  */
 public class RoomRepository {
 
-    private final Map<String, Room> store = new ConcurrentHashMap<>();
+    // Primary store: hotelId -> (roomId -> Room)
+    private final Map<String, Map<String, Room>> store = new ConcurrentHashMap<>();
 
-    // ── Lifecycle methods (RoomService uses these) ────────────────────────────
+    // Secondary index: roomId -> hotelId  (for O(1) direct room lookup)
+    private final Map<String, String> roomHotelIndex = new ConcurrentHashMap<>();
 
-    public void save(Room room) {
-        store.put(room.getRoomId(), room);
+    public void save(String hotelId, Room room) {
+        store.computeIfAbsent(hotelId, id -> new ConcurrentHashMap<>())
+             .put(room.getRoomId(), room);
+        roomHotelIndex.put(room.getRoomId(), hotelId);
     }
 
+    /** Direct room lookup via secondary index — O(1). */
     public Optional<Room> findById(String roomId) {
-        return Optional.ofNullable(store.get(roomId));
+        String hotelId = roomHotelIndex.get(roomId);
+        if (hotelId == null) return Optional.empty();
+        Map<String, Room> hotelRooms = store.get(hotelId);
+        if (hotelRooms == null) return Optional.empty();
+        return Optional.ofNullable(hotelRooms.get(roomId));
     }
 
+    /** Which hotel does this room belong to? */
+    public Optional<String> findHotelIdByRoomId(String roomId) {
+        return Optional.ofNullable(roomHotelIndex.get(roomId));
+    }
+
+    /** All rooms for a hotel — O(1). */
     public List<Room> findByHotelId(String hotelId) {
-        return store.values().stream()
-            .filter(r -> r.getHotelId().equals(hotelId))
+        Map<String, Room> hotelRooms = store.get(hotelId);
+        if (hotelRooms == null) return new ArrayList<>();
+        return new ArrayList<>(hotelRooms.values());
+    }
+
+    /** Available rooms in a hotel filtered by type — used by SearchService. */
+    public List<Room> findAvailableByHotelIdAndType(String hotelId, RoomType type) {
+        return findByHotelId(hotelId).stream()
+            .filter(r -> type == null || r.getType() == type)
+            .filter(Room::isAvailable)
             .collect(Collectors.toList());
     }
 
+    /** Rooms by status across the chain — used by admin ops. */
     public List<Room> findByStatus(RoomStatus status) {
         return store.values().stream()
+            .flatMap(hotelRooms -> hotelRooms.values().stream())
             .filter(r -> r.getStatus() == status)
             .collect(Collectors.toList());
     }
 
+    /** Remove a single room — O(1) via secondary index. */
     public void delete(String roomId) {
-        store.remove(roomId);
+        String hotelId = roomHotelIndex.remove(roomId);
+        if (hotelId != null) {
+            Map<String, Room> hotelRooms = store.get(hotelId);
+            if (hotelRooms != null) hotelRooms.remove(roomId);
+        }
+    }
+
+    /** Remove all rooms for a hotel — O(1) single map.remove(). */
+    public void deleteAllByHotelId(String hotelId) {
+        Map<String, Room> removed = store.remove(hotelId);
+        if (removed != null) {
+            removed.keySet().forEach(roomHotelIndex::remove);
+        }
     }
 
     public List<Room> findAll() {
-        return new ArrayList<>(store.values());
-    }
-
-    // ── Query methods (SearchService uses these - NOT RoomService) ───────────
-
-    public List<Room> findAvailableByHotelIdAndType(String hotelId, RoomType type) {
         return store.values().stream()
-            .filter(r -> r.getHotelId().equals(hotelId))
-            .filter(r -> type == null || r.getType() == type)
-            .filter(Room::isAvailable)
+            .flatMap(m -> m.values().stream())
             .collect(Collectors.toList());
     }
 }
